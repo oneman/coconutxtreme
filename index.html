@@ -39,7 +39,7 @@
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const DISPLAY = '"Bungee", Impact, "Arial Black", sans-serif';
   const BODY = '"Chakra Petch", "Trebuchet MS", system-ui, sans-serif';
-  const LIVES = 5;
+  const LIVES = 3;
   const GLITTER = ['#ff4fa3', '#ffd84a', '#7ef0d4', '#b98cff', '#ffffff', '#5ad1ff'];
 
   let W = 0, H = 0, S = 1, DPR = 1;
@@ -54,9 +54,11 @@
   resize();
 
   // ---------- storage (best score, per viewer) ----------
-  let best = 0;
-  try { best = +localStorage.getItem('coconut-xtreme-best') || 0; } catch (e) {}
-  function saveBest() { try { localStorage.setItem('coconut-xtreme-best', String(best)); } catch (e) {} }
+  // best = longest survival in seconds
+  let best = 0, newBest = false;
+  try { best = +localStorage.getItem('coconut-xtreme-best-time') || 0; } catch (e) {}
+  function saveBest() { try { localStorage.setItem('coconut-xtreme-best-time', String(best)); } catch (e) {} }
+  const clock = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
 
   // ---------- audio ----------
   let actx = null, muted = false, noiseBuf = null;
@@ -156,7 +158,7 @@
   let score = 0, lives = LIVES, combo = 0, meter = 0, xtremeT = 0, elapsed = 0, shake = 0, flash = 0, hurtT = 0, hurtFlash = 0;
   let nuts = [], gulls = [], parts = [], pops = [], hanging = [], grounded = [], crabs = [];
   let drones = [], candles = [], blasts = [], glitter = [];
-  let gullTimer = 0, dropTimer = 0, bigTimer = 0, smallTimer = 0;
+  let wave = 1, gullTimer = 0, dropTimer = 0, bigTimer = 0, smallTimer = 0;
   const player = { x: 0, vx: 0, walk: 0, py: 0, pvy: 0, c: 0, w: 0 };
 
   const groundY = () => H - 56 * S;
@@ -195,7 +197,7 @@
     score = 0; lives = LIVES; combo = 0; meter = 0; xtremeT = 0; elapsed = 0; shake = 0; flash = 0; hurtT = 0; hurtFlash = 0;
     nuts = []; gulls = []; parts = []; pops = []; hanging = []; grounded = []; crabs = [];
     drones = []; candles = []; blasts = []; glitter = [];
-    gullTimer = 5; dropTimer = 0.4; bigTimer = 14; smallTimer = 24;
+    gullTimer = 5; dropTimer = 0.4; bigTimer = 6; smallTimer = 13; wave = 1;
     player.x = W / 2; player.vx = 0; player.py = 0; player.pvy = 0; player.c = 0;
     state = 'play';
   }
@@ -231,7 +233,8 @@
   function checkOver() {
     if (lives > 0 || state !== 'play') return;
     state = 'over'; overTimer = 0; sfx.over();
-    if (score > best) { best = score; saveBest(); }
+    newBest = elapsed > best;
+    if (newBest) { best = elapsed; saveBest(); }
   }
 
   // A birthday-candle firework: deadly up close for a moment, then glitter rains onto the sand.
@@ -359,14 +362,13 @@
     for (const n of nuts) {
       if (!n.landed) continue;
       const r = R() * n.k;
-      lives--; combo = 0;
+      combo = 0;
       sfx.thud(); shake = reduceMotion ? 0 : 6;
       burst(n.x, gy, 14, ['#f2c98a', '#e0b070', '#fff4e0'], 200, 4);
       addPop(n.x, gy - 50 * S, 'THUD', '#fff4e0', 24);
       grounded.push({ x: n.x, y: gy - r * 0.35 + 6 * S, vx: n.vx * 0.25, rot: n.rot, gold: n.gold, k: n.k, wait: 0.7, crab: false });
     }
     nuts = nuts.filter(n => !n.landed);
-    checkOver();
 
     updateCrabs(dt, gy);
 
@@ -446,21 +448,24 @@
   }
 
   function updateDrones(dt, gy) {
+    // the onslaught: every 30 seconds a new wave brings more, faster drones
+    const w = 1 + Math.floor(elapsed / 30);
+    if (w > wave) { wave = w; addPop(W / 2, H * 0.45, 'WAVE ' + wave, '#ff4fa3', 40); sfx.xtreme(); }
     // big drone: carries a birthday candle and drops it over you
     bigTimer -= dt;
     if (bigTimer <= 0) {
       const fromLeft = Math.random() < 0.5;
       drones.push({ kind: 'big', x: fromLeft ? -50 * S : W + 50 * S, y: H * (0.1 + Math.random() * 0.12),
-        vx: (fromLeft ? 1 : -1) * (120 + Math.min(elapsed, 120)) * S, candles: elapsed > 60 ? 2 : 1, cool: 0, spin: 0, t: 0 });
-      bigTimer = Math.max(7, 16 - elapsed / 20) + Math.random() * 5;
+        vx: (fromLeft ? 1 : -1) * (120 + Math.min(elapsed, 120)) * S, candles: Math.min(1 + Math.floor((wave - 1) / 2), 4), cool: 0, spin: 0, t: 0 });
+      bigTimer = Math.max(2.5, 10 - wave * 1.2) + Math.random() * 3;
     }
     // small drone: swoops at your head or your feet
     smallTimer -= dt;
-    if (smallTimer <= 0 && !drones.some(d => d.kind === 'small')) {
+    if (smallTimer <= 0 && drones.filter(d => d.kind === 'small').length < Math.min(1 + Math.floor(wave / 3), 3)) {
       const fromLeft = Math.random() < 0.5;
       drones.push({ kind: 'small', x: fromLeft ? -30 * S : W + 30 * S, y: H * 0.3, dir: fromLeft ? 1 : -1,
         phase: 'enter', t: 0, passes: 0, limit: 1 + (Math.random() < 0.5 ? 1 : 0), aim: 'head', ty: 0, spin: 0 });
-      smallTimer = Math.max(10, 22 - elapsed / 15) + Math.random() * 6;
+      smallTimer = Math.max(3, 14 - wave * 1.5) + Math.random() * 4;
     }
     const edge = d => d.dir === 1 ? 46 * S : W - 46 * S;
     for (const d of drones) {
@@ -810,8 +815,9 @@
 
   function drawHUD() {
     const pad = Math.max(16, 18 * S);
-    txt(String(score), pad, pad + 14 * S, 30 * S, '#fff4e0', DISPLAY, 'left');
-    txt('BEST ' + best, pad, pad + 42 * S, 13 * S, '#ffd2a8', BODY, 'left');
+    txt(clock(elapsed), pad, pad + 14 * S, 30 * S, '#fff4e0', DISPLAY, 'left');
+    txt('WAVE ' + wave + ' · ' + score + ' PTS', pad, pad + 42 * S, 13 * S, '#ffd2a8', BODY, 'left');
+    txt('BEST ' + clock(best), pad, pad + 60 * S, 13 * S, '#c9a7d6', BODY, 'left');
     const gap = Math.min(26 * S, (W * 0.3) / LIVES);
     for (let i = 0; i < LIVES; i++) {
       ctx.globalAlpha = i < lives ? 1 : 0.25;
@@ -849,12 +855,12 @@
       txt('COCONUT', W / 2, top + wob, big, '#fff4e0');
       txt('XTREME', W / 2, top + big * 1.05 - wob, big * 1.08, '#ff6a3d');
       const lines = [
-        'Keep the coconuts up with your surfboard.',
-        'Little ones fly high. Big ones bounce low.',
-        'Drop one and a coconut crab steals it.',
+        'Survive the quadrotor onslaught.',
+        'Three drone hits and you wipe out.',
         'Dodge candle bombs and their glitter.',
         'Duck or jump when a small drone swoops.',
-        'Bonk seagulls and drones with coconuts.',
+        'Juggle coconuts to bonk drones down.',
+        'Dropped coconuts just feed the crabs.',
       ];
       const fs = Math.max(13, Math.min(16 * S, W / 28));
       lines.forEach((l, i) => txt(l, W / 2, top + big * 2.2 + i * fs * 1.6, fs, '#ffe3c4', BODY, 'center', false));
@@ -865,9 +871,10 @@
       help.forEach((h, i) => txt(h, W / 2, H - (18 + (help.length - 1 - i) * 16) * Math.max(1, S) - 6, Math.max(11, 11 * S), '#c9a7d6', BODY, 'center', false));
     } else if (state === 'over') {
       txt('WIPEOUT', W / 2, H * 0.32, big, '#ff6a3d');
-      txt(String(score), W / 2, H * 0.32 + big * 1.3, big * 0.9, '#fff4e0');
-      txt(score >= best && score > 0 ? 'NEW BEST!' : 'BEST ' + best, W / 2, H * 0.32 + big * 2.15, 18 * S, '#ffd84a', BODY);
-      if (overTimer > 0.8) txt('TAP OR PRESS SPACE TO SURF AGAIN', W / 2, H * 0.32 + big * 3, Math.max(13, 15 * S), '#ffe3c4', BODY);
+      txt(clock(elapsed), W / 2, H * 0.32 + big * 1.3, big * 0.9, '#fff4e0');
+      txt('SURVIVED TO WAVE ' + wave + ' · ' + score + ' PTS', W / 2, H * 0.32 + big * 2.05, Math.max(13, 15 * S), '#ffe3c4', BODY);
+      txt(newBest ? 'NEW BEST!' : 'BEST ' + clock(best), W / 2, H * 0.32 + big * 2.6, 18 * S, '#ffd84a', BODY);
+      if (overTimer > 0.8) txt('TAP OR PRESS SPACE TO SURF AGAIN', W / 2, H * 0.32 + big * 3.4, Math.max(13, 15 * S), '#ffe3c4', BODY);
     } else if (state === 'paused') {
       txt('PAUSED', W / 2, H * 0.42, big, '#fff4e0');
       txt('Tap or press P to keep surfing', W / 2, H * 0.42 + big, Math.max(13, 15 * S), '#ffe3c4', BODY);
