@@ -30,7 +30,7 @@
   #game:focus-visible { box-shadow: inset 0 0 0 3px var(--ember); }
 </style>
 
-<canvas id="game" tabindex="0" aria-label="Coconut Xtreme game. Move the surfboard with the mouse, touch, or arrow keys to keep coconuts in the air."></canvas>
+<canvas id="game" tabindex="0" aria-label="Coconut Xtreme game. Move the surfer with the mouse, touch, or A and D. W jumps, S ducks. Keep the coconuts in the air and dodge the drones."></canvas>
 
 <script>
 (() => {
@@ -39,6 +39,8 @@
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const DISPLAY = '"Bungee", Impact, "Arial Black", sans-serif';
   const BODY = '"Chakra Petch", "Trebuchet MS", system-ui, sans-serif';
+  const LIVES = 5;
+  const GLITTER = ['#ff4fa3', '#ffd84a', '#7ef0d4', '#b98cff', '#ffffff', '#5ad1ff'];
 
   let W = 0, H = 0, S = 1, DPR = 1;
   function resize() {
@@ -57,7 +59,7 @@
   function saveBest() { try { localStorage.setItem('coconut-xtreme-best', String(best)); } catch (e) {} }
 
   // ---------- audio ----------
-  let actx = null, muted = false;
+  let actx = null, muted = false, noiseBuf = null;
   function beep(freq, dur, type = 'square', vol = 0.08, slide = 0) {
     if (!actx || muted) return;
     const t = actx.currentTime;
@@ -67,34 +69,80 @@
     g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur);
   }
+  function noise(dur, vol = 0.12, freq = 1800) {
+    if (!actx || muted) return;
+    if (!noiseBuf) {
+      noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t = actx.currentTime, src = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+    src.buffer = noiseBuf; f.type = 'bandpass'; f.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f).connect(g).connect(actx.destination); src.start(t); src.stop(t + dur);
+  }
   const sfx = {
-    bounce: (c) => beep(220 + Math.min(c, 30) * 18, 0.09, 'triangle', 0.12),
+    bounce: (c, k) => beep((220 + Math.min(c, 30) * 18) / k, 0.09, 'triangle', 0.12),
     bonk: () => { beep(900, 0.08, 'square', 0.07, -600); beep(1400, 0.12, 'sine', 0.05, 400); },
-    splat: () => beep(140, 0.35, 'sawtooth', 0.1, -100),
+    thud: () => { beep(110, 0.25, 'sine', 0.16, -60); noise(0.12, 0.08, 400); },
     gold: () => { beep(880, 0.08, 'sine', 0.08); setTimeout(() => beep(1320, 0.12, 'sine', 0.08), 70); },
     xtreme: () => [330, 440, 554, 660].forEach((f, i) => setTimeout(() => beep(f, 0.14, 'square', 0.06), i * 70)),
     over: () => [392, 330, 262, 196].forEach((f, i) => setTimeout(() => beep(f, 0.22, 'triangle', 0.1), i * 160)),
+    jump: () => beep(330, 0.12, 'triangle', 0.07, 300),
+    pop: () => { noise(0.5, 0.18, 2400); beep(1600, 0.15, 'square', 0.04, -1200); [0, 80, 150, 260].forEach(d => setTimeout(() => noise(0.06, 0.08, 5000), d + 120)); },
+    hurt: () => { beep(200, 0.3, 'sawtooth', 0.1, -140); },
+    whoosh: () => { noise(0.35, 0.06, 900); beep(500, 0.3, 'sine', 0.03, 300); },
+    crunch: () => [0, 90, 180].forEach(d => setTimeout(() => noise(0.07, 0.12, 700), d)),
+    whistle: () => beep(1500, 0.6, 'sine', 0.03, -900),
   };
 
   // ---------- input ----------
   const keys = {};
-  let pointerX = null;
-  cvs.addEventListener('pointermove', e => { pointerX = e.clientX - cvs.getBoundingClientRect().left; });
+  let pointerX = null, touchSeen = false, movePointer = null, duckPointer = null;
+  const btnR = () => Math.max(30, 32 * S);
+  const btnPad = () => Math.max(16, 18 * S);
+  const duckBtn = () => ({ x: btnPad() + btnR(), y: H - btnPad() - btnR() });
+  const jumpBtn = () => ({ x: W - btnPad() - btnR(), y: H - btnPad() - btnR() });
+  const onBtn = (b, x, y) => Math.hypot(x - b.x, y - b.y) <= btnR() * 1.25;
+
   cvs.addEventListener('pointerdown', e => {
-    pointerX = e.clientX - cvs.getBoundingClientRect().left;
-    cvs.focus(); press();
+    const r = cvs.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    cvs.focus();
+    if (e.pointerType === 'touch') touchSeen = true;
+    if (touchSeen && e.pointerType === 'touch' && state === 'play') {
+      if (onBtn(jumpBtn(), x, y)) { jump(); return; }
+      if (onBtn(duckBtn(), x, y)) { duckPointer = e.pointerId; return; }
+      movePointer = e.pointerId;
+    }
+    pointerX = x;
+    press();
   });
+  cvs.addEventListener('pointermove', e => {
+    if (e.pointerType === 'touch' && movePointer !== null && e.pointerId !== movePointer) return;
+    if (e.pointerType === 'touch' && e.pointerId === duckPointer) return;
+    pointerX = e.clientX - cvs.getBoundingClientRect().left;
+  });
+  const lift = e => {
+    if (e.pointerId === duckPointer) duckPointer = null;
+    if (e.pointerId === movePointer) movePointer = null;
+  };
+  cvs.addEventListener('pointerup', lift);
+  cvs.addEventListener('pointercancel', lift);
+
   addEventListener('keydown', e => {
-    keys[e.key] = true;
-    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); press(); }
-    if (e.key === 'm' || e.key === 'M') muted = !muted;
-    if ((e.key === 'p' || e.key === 'P' || e.key === 'Escape') && (state === 'play' || state === 'paused')) {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    keys[k] = true;
+    if (k === ' ' || k === 'Enter' || k === 'ArrowUp' || k === 'ArrowDown') e.preventDefault();
+    if (k === 'w' || k === 'ArrowUp' || (k === ' ' && state === 'play')) jump();
+    if (k === ' ' || k === 'Enter') press();
+    if (k === 'm') muted = !muted;
+    if ((k === 'p' || k === 'Escape') && (state === 'play' || state === 'paused')) {
       state = state === 'play' ? 'paused' : 'play';
     }
-    if (e.key.startsWith('Arrow') || e.key === 'a' || e.key === 'd') pointerX = null;
+    if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'a' || k === 'd') pointerX = null;
   });
-  addEventListener('keyup', e => { keys[e.key] = false; });
-  addEventListener('blur', () => { if (state === 'play') state = 'paused'; });
+  addEventListener('keyup', e => { keys[e.key.length === 1 ? e.key.toLowerCase() : e.key] = false; });
+  addEventListener('blur', () => { if (state === 'play') state = 'paused'; for (const k in keys) keys[k] = false; });
 
   function press() {
     if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
@@ -105,12 +153,15 @@
 
   // ---------- world ----------
   let state = 'title', overTimer = 0;
-  let score, lives, combo, meter, xtremeT, elapsed, shake, flash;
-  let nuts, gulls, parts, pops, hanging, gullTimer, dropTimer;
-  const board = { x: 0, vx: 0, w: 0, walk: 0 };
+  let score = 0, lives = LIVES, combo = 0, meter = 0, xtremeT = 0, elapsed = 0, shake = 0, flash = 0, hurtT = 0, hurtFlash = 0;
+  let nuts = [], gulls = [], parts = [], pops = [], hanging = [], grounded = [], crabs = [];
+  let drones = [], candles = [], blasts = [], glitter = [];
+  let gullTimer = 0, dropTimer = 0, bigTimer = 0, smallTimer = 0;
+  const player = { x: 0, vx: 0, walk: 0, py: 0, pvy: 0, c: 0, w: 0 };
 
   const groundY = () => H - 56 * S;
-  const boardY = () => groundY() - 112 * S;
+  const feetY = () => groundY() - player.py;
+  const boardY = () => feetY() - (112 - 28 * player.c) * S;
   const R = () => 17 * S;
   const gravity = () => 1050 * S * (1 + Math.min(elapsed / 150, 0.6));
   const maxNuts = () => Math.min(1 + Math.floor(elapsed / 22), 5);
@@ -119,62 +170,112 @@
     { x: W * 0.07, top: H * 0.2, lean: 1 },
     { x: W * 0.93, top: H * 0.24, lean: -1 },
   ];
+  const canopy = p => ({ x: p.x + p.lean * 46 * S, y: p.top });
+  function palmPoint(p, u) {
+    const b = { x: p.x - p.lean * 10 * S, y: groundY() + 6 * S }, c = canopy(p);
+    const k = { x: p.x - p.lean * 30 * S, y: (b.y + c.y) / 2 };
+    const v = 1 - u;
+    return {
+      x: v * v * b.x + 2 * v * u * k.x + u * u * c.x,
+      y: v * v * b.y + 2 * v * u * k.y + u * u * c.y,
+      a: Math.atan2(2 * v * (k.y - b.y) + 2 * u * (c.y - k.y), 2 * v * (k.x - b.x) + 2 * u * (c.x - k.x)),
+    };
+  }
+  function playerBox() {
+    const f = feetY(), headY = f - (84 - 16 * player.c) * S;
+    return { l: player.x - 11 * S, r: player.x + 11 * S, t: headY - 10 * S, b: f };
+  }
+  function distToPlayer(x, y) {
+    const b = playerBox();
+    const cx = Math.max(b.l, Math.min(b.r, x)), cy = Math.max(b.t, Math.min(b.b, y));
+    return Math.hypot(x - cx, y - cy);
+  }
 
   function startGame() {
-    score = 0; lives = 3; combo = 0; meter = 0; xtremeT = 0; elapsed = 0; shake = 0; flash = 0;
-    nuts = []; gulls = []; parts = []; pops = []; hanging = [];
-    gullTimer = 5; dropTimer = 0.4;
-    board.x = W / 2; board.vx = 0;
+    score = 0; lives = LIVES; combo = 0; meter = 0; xtremeT = 0; elapsed = 0; shake = 0; flash = 0; hurtT = 0; hurtFlash = 0;
+    nuts = []; gulls = []; parts = []; pops = []; hanging = []; grounded = []; crabs = [];
+    drones = []; candles = []; blasts = []; glitter = [];
+    gullTimer = 5; dropTimer = 0.4; bigTimer = 14; smallTimer = 24;
+    player.x = W / 2; player.vx = 0; player.py = 0; player.pvy = 0; player.c = 0;
     state = 'play';
   }
 
-  function canopy(p) {
-    return { x: p.x + p.lean * 46 * S, y: p.top };
+  function jump() {
+    if (state !== 'play' || player.py > 0) return;
+    player.pvy = 640 * S; player.py = 0.01; sfx.jump();
   }
 
   function queueDrop() {
-    const ps = palms();
-    const p = ps[Math.random() < 0.5 ? 0 : 1];
-    const c = canopy(p);
+    const p = palms()[Math.random() < 0.5 ? 0 : 1], c = canopy(p);
     const gold = Math.random() < 0.12 && elapsed > 10;
-    hanging.push({ x: c.x + (Math.random() - 0.5) * 30 * S, y: c.y + 18 * S, t: 1.1, gold, dir: p.lean });
+    const k = 0.72 + Math.random() * 0.6;
+    hanging.push({ x: c.x + (Math.random() - 0.5) * 30 * S, y: c.y + 18 * S, t: 1.1, gold, dir: p.lean, k });
   }
 
-  function addPop(x, y, text, color, size = 22) {
-    pops.push({ x, y, text, color, size, life: 1 });
-  }
-  function burst(x, y, n, colors, speed = 260, size = 4) {
+  function addPop(x, y, text, color, size = 22) { pops.push({ x, y, text, color, size, life: 1 }); }
+  function burst(x, y, n, colors, speed = 260, size = 4, extra = {}) {
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2, v = (0.3 + Math.random()) * speed * S;
-      parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120 * S, life: 0.6 + Math.random() * 0.6,
-        max: 1.2, c: colors[i % colors.length], s: (size * (0.5 + Math.random())) * S });
+      parts.push(Object.assign({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 120 * S, life: 0.6 + Math.random() * 0.6,
+        max: 1.2, c: colors[i % colors.length], s: (size * (0.5 + Math.random())) * S }, extra));
     }
+  }
+
+  function hurt(why) {
+    if (hurtT > 0 || state !== 'play') return;
+    lives--; combo = 0; hurtT = 1.6; hurtFlash = 1;
+    shake = reduceMotion ? 0 : 14; sfx.hurt();
+    addPop(player.x, feetY() - 130 * S, why, '#ff4fa3', 26);
+    checkOver();
+  }
+  function checkOver() {
+    if (lives > 0 || state !== 'play') return;
+    state = 'over'; overTimer = 0; sfx.over();
+    if (score > best) { best = score; saveBest(); }
+  }
+
+  // A birthday-candle firework: deadly up close for a moment, then glitter rains onto the sand.
+  function blast(x, y) {
+    blasts.push({ x, y, t: 0 });
+    sfx.pop(); shake = Math.max(shake, reduceMotion ? 0 : 8);
+    burst(x, y, 70, GLITTER, 420, 4, { glitter: true, life: 4, max: 4 });
+    burst(x, y, 12, ['#ffffff', '#ffd84a'], 200, 7);
   }
 
   function update(dt) {
     if (state === 'over') overTimer += dt;
-    // board movement runs on the title screen too, so it feels alive
-    const prevX = board.x;
-    board.w = 164 * S * (xtremeT > 0 ? 1.18 : 1);
-    if (keys.ArrowLeft || keys.a) board.x -= 720 * S * dt;
-    if (keys.ArrowRight || keys.d) board.x += 720 * S * dt;
-    if (pointerX !== null) board.x += (pointerX - board.x) * Math.min(1, dt * 22);
-    board.x = Math.max(board.w / 2, Math.min(W - board.w / 2, board.x || W / 2));
-    board.vx = (board.x - prevX) / Math.max(dt, 1e-4);
-    board.walk += Math.min(Math.abs(board.vx), 900 * S) * dt / (16 * S);
+    // the surfer moves on the title screen too, so it feels alive
+    const prevX = player.x, crouching = (keys.s || keys.ArrowDown || duckPointer !== null) && state === 'play';
+    player.w = 164 * S * (xtremeT > 0 ? 1.18 : 1);
+    const speed = 720 * S * (crouching && player.py === 0 ? 0.55 : 1);
+    if (keys.ArrowLeft || keys.a) player.x -= speed * dt;
+    if (keys.ArrowRight || keys.d) player.x += speed * dt;
+    if (pointerX !== null) player.x += (pointerX - player.x) * Math.min(1, dt * (crouching ? 12 : 22));
+    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x || W / 2));
+    player.vx = (player.x - prevX) / Math.max(dt, 1e-4);
+    player.walk += Math.min(Math.abs(player.vx), 900 * S) * dt / (16 * S);
+    if (player.py > 0) {
+      player.pvy -= 1900 * S * dt; player.py += player.pvy * dt;
+      if (player.py <= 0) { player.py = 0; player.pvy = 0; burst(player.x, groundY(), 6, ['#f2c98a', '#fff4e0'], 120, 3); }
+    }
+    player.c += ((crouching && player.py === 0 ? 1 : 0) - player.c) * Math.min(1, dt * 24);
 
     if (state !== 'play') return;
     elapsed += dt;
     if (xtremeT > 0) { xtremeT -= dt; if (xtremeT <= 0) addPop(W / 2, H * 0.42, 'chill', '#ffe3b0', 26); }
     shake = Math.max(0, shake - dt * 30);
     flash = Math.max(0, flash - dt * 2);
+    hurtT = Math.max(0, hurtT - dt);
+    hurtFlash = Math.max(0, hurtFlash - dt * 2.5);
+    const gy = groundY();
 
-    // spawn coconuts from the palms
+    // coconuts drop out of the palms
     dropTimer -= dt;
-    if (dropTimer <= 0 && nuts.length + hanging.length < maxNuts()) { queueDrop(); dropTimer = 1.6; }
+    const inPlay = nuts.length + hanging.length + grounded.length + crabs.filter(c => c.nut).length;
+    if (dropTimer <= 0 && inPlay < maxNuts()) { queueDrop(); dropTimer = 1.6; }
     for (const h of hanging) {
       h.t -= dt;
-      if (h.t <= 0) nuts.push({ x: h.x, y: h.y, vx: h.dir * (60 + Math.random() * 80) * S, vy: 0, rot: 0, gold: h.gold, trail: [] });
+      if (h.t <= 0) nuts.push({ x: h.x, y: h.y, vx: h.dir * (60 + Math.random() * 80) * S, vy: 0, rot: 0, gold: h.gold, k: h.k, trail: [] });
     }
     hanging = hanging.filter(h => h.t > 0);
 
@@ -194,10 +295,12 @@
     }
     gulls = gulls.filter(g => g.x > -80 * S && g.x < W + 80 * S && g.y < H + 60 * S);
 
+    updateDrones(dt, gy);
+
     // coconuts
-    const r = R(), by = boardY(), gy = groundY(), G = gravity();
+    const G = gravity();
     for (const n of nuts) {
-      const prevY = n.y;
+      const r = R() * n.k, by = boardY(), prevY = n.y;
       n.vy += G * dt;
       n.x += n.vx * dt; n.y += n.vy * dt;
       n.rot += n.vx * dt / r;
@@ -205,20 +308,22 @@
       if (n.x < r) { n.x = r; n.vx = Math.abs(n.vx) * 0.9; }
       if (n.x > W - r) { n.x = W - r; n.vx = -Math.abs(n.vx) * 0.9; }
 
-      // surfboard bounce (swept so fast coconuts can't tunnel)
-      const half = board.w / 2 + r * 0.6;
-      if (n.vy > 0 && prevY + r <= by + 4 * S && n.y + r >= by && Math.abs(n.x - board.x) <= half) {
+      // surfboard bounce (swept so fast coconuts can't tunnel). Small nuts fly high, big ones thud low.
+      const half = player.w / 2 + r * 0.6;
+      if (n.vy > 0 && prevY + r <= by + 6 * S && n.y + r >= by && Math.abs(n.x - player.x) <= half) {
         n.y = by - r;
-        const apex = H * (0.14 + Math.random() * 0.2);
-        n.vy = -Math.sqrt(2 * G * Math.max(by - apex, 120 * S));
-        const off = (n.x - board.x) / (board.w / 2);
-        n.vx = off * 300 * S + board.vx * 0.25;
-        n.vx = Math.max(-520 * S, Math.min(520 * S, n.vx));
+        const lift = 1.3 - (n.k - 0.72) * 0.9;
+        const apex = Math.max(H * 0.05, by - (by - H * (0.14 + Math.random() * 0.2)) * lift);
+        n.vy = -Math.sqrt(2 * G * Math.max(by - apex, 110 * S));
+        if (player.pvy > 0) n.vy -= player.pvy * 0.35;
+        const off = (n.x - player.x) / (player.w / 2);
+        n.vx = (off * 300 * S + player.vx * 0.25) / n.k;
+        n.vx = Math.max(-560 * S, Math.min(560 * S, n.vx));
         combo++;
         const pts = 10 * mult() * (n.gold ? 5 : 1);
         score += pts;
         if (n.gold) { sfx.gold(); burst(n.x, by, 14, ['#ffd84a', '#fff4b0']); addPop(n.x, by - 40 * S, 'GOLD +' + pts, '#ffd84a', 24); }
-        else { sfx.bounce(combo); addPop(n.x, by - 30 * S, '+' + pts, '#fff4e0', 16); }
+        else { sfx.bounce(combo, n.k); addPop(n.x, by - 30 * S, '+' + pts, '#fff4e0', 16); }
         burst(n.x, by, 5, ['#fff4e0', '#f2c98a'], 140, 3);
         if (xtremeT <= 0) {
           meter = Math.min(1, meter + 0.06);
@@ -229,37 +334,201 @@
 
       // bonk seagulls
       for (const g of gulls) {
-        if (g.hit) continue;
-        if (Math.hypot(n.x - g.x, n.y - g.y) < r + 22 * S) {
-          g.hit = true; g.vy = -200 * S; g.vx *= 0.3;
-          n.vy = Math.abs(n.vy) * 0.2 + 60 * S;
-          const pts = 250 * mult();
-          score += pts;
-          sfx.bonk(); shake = reduceMotion ? 0 : 6;
-          burst(g.x, g.y, 18, ['#ffffff', '#d9dde6', '#ffb347']);
-          addPop(g.x, g.y - 20 * S, 'BONK! +' + pts, '#ffd84a', 26);
-        }
+        if (g.hit || Math.hypot(n.x - g.x, n.y - g.y) >= r + 22 * S) continue;
+        g.hit = true; g.vy = -200 * S; g.vx *= 0.3;
+        n.vy = Math.abs(n.vy) * 0.2 + 60 * S;
+        const pts = 250 * mult();
+        score += pts;
+        sfx.bonk(); shake = reduceMotion ? 0 : 6;
+        burst(g.x, g.y, 18, ['#ffffff', '#d9dde6', '#ffb347']);
+        addPop(g.x, g.y - 20 * S, 'BONK! +' + pts, '#ffd84a', 26);
+      }
+      // bonk drones out of the sky
+      for (const d of drones) {
+        if (d.dead || Math.hypot(n.x - d.x, n.y - d.y) >= r + (d.kind === 'big' ? 30 : 20) * S) continue;
+        d.dead = true;
+        n.vy = Math.abs(n.vy) * 0.2 + 60 * S;
+        const pts = 400 * mult();
+        score += pts;
+        addPop(d.x, d.y - 24 * S, 'DRONE DOWN +' + pts, '#7ef0d4', 24);
+        blast(d.x, d.y);
       }
 
-      if (n.y + r >= gy) n.dead = true;
+      if (n.y + r * 0.4 >= gy) n.landed = true;
     }
     for (const n of nuts) {
-      if (!n.dead) continue;
+      if (!n.landed) continue;
+      const r = R() * n.k;
       lives--; combo = 0;
-      sfx.splat(); shake = reduceMotion ? 0 : 12;
-      burst(n.x, gy, 22, ['#fffaf0', '#ffffff', '#6b3f1f', '#8a5a2b'], 320, 5);
-      addPop(n.x, gy - 40 * S, 'SPLAT', '#ffffff', 28);
+      sfx.thud(); shake = reduceMotion ? 0 : 6;
+      burst(n.x, gy, 14, ['#f2c98a', '#e0b070', '#fff4e0'], 200, 4);
+      addPop(n.x, gy - 50 * S, 'THUD', '#fff4e0', 24);
+      grounded.push({ x: n.x, y: gy - r * 0.35 + 6 * S, vx: n.vx * 0.25, rot: n.rot, gold: n.gold, k: n.k, wait: 0.7, crab: false });
     }
-    nuts = nuts.filter(n => !n.dead);
-    if (lives <= 0) {
-      state = 'over'; overTimer = 0; sfx.over();
-      if (score > best) { best = score; saveBest(); }
-    }
+    nuts = nuts.filter(n => !n.landed);
+    checkOver();
 
-    for (const p of parts) { p.vy += 900 * S * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+    updateCrabs(dt, gy);
+
+    for (const p of parts) {
+      if (p.glitter) {
+        p.vx *= 1 - 1.6 * dt; p.vy = Math.min(p.vy + 700 * S * dt, 150 * S);
+        p.x += p.vx * dt + Math.sin(p.life * 9 + p.s) * 20 * S * dt; p.y += p.vy * dt;
+        if (p.y >= gy + 2 * S) {
+          p.life = 0;
+          glitter.push({ x: p.x, y: gy + 2 * S + Math.random() * 40 * S, c: p.c, life: 9 + Math.random() * 4, ph: Math.random() * 6 });
+        }
+      } else { p.vy += 900 * S * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+      p.life -= dt;
+    }
     parts = parts.filter(p => p.life > 0);
+    for (const g of glitter) g.life -= dt;
+    glitter = glitter.filter(g => g.life > 0);
+    if (glitter.length > 500) glitter.splice(0, glitter.length - 500);
     for (const t of pops) { t.y -= 40 * S * dt; t.life -= dt * 0.9; }
     pops = pops.filter(t => t.life > 0);
+  }
+
+  function updateCrabs(dt, gy) {
+    for (const g of grounded) {
+      g.x += g.vx * dt; g.vx *= 1 - 3 * dt; g.rot += g.vx * dt / (R() * g.k);
+      g.x = Math.max(20 * S, Math.min(W - 20 * S, g.x));
+      if (g.crab) continue;
+      g.wait -= dt;
+      if (g.wait > 0) continue;
+      // the crab lives in the nearer palm
+      const ps = palms(), p = Math.abs(g.x - ps[0].x) < Math.abs(g.x - ps[1].x) ? ps[0] : ps[1];
+      const base = palmPoint(p, 0);
+      g.crab = true;
+      crabs.push({ target: g, palm: p, x: base.x, y: gy + 4 * S, phase: 'walk', u: 0, t: 0, a: 0, alpha: 1, step: 0, nut: null });
+    }
+    for (const c of crabs) {
+      c.step += dt * 14;
+      const home = palmPoint(c.palm, 0).x;
+      if (c.phase === 'walk') {
+        const d = c.target.x - c.x, v = 150 * S * dt;
+        if (Math.abs(d) <= v) { c.x = c.target.x; c.phase = 'grab'; c.t = 0.4; }
+        else c.x += Math.sign(d) * v;
+      } else if (c.phase === 'grab') {
+        c.t -= dt;
+        if (c.t <= 0) {
+          c.nut = c.target; grounded = grounded.filter(g => g !== c.target);
+          c.phase = 'home'; addPop(c.x, gy - 60 * S, 'yoink', '#ff9b6a', 18);
+        }
+      } else if (c.phase === 'home') {
+        const d = home - c.x, v = 120 * S / c.nut.k * dt;
+        if (Math.abs(d) <= v) { c.x = home; c.phase = 'climb'; c.u = 0; }
+        else c.x += Math.sign(d) * v;
+      } else if (c.phase === 'climb') {
+        c.u = Math.min(0.97, c.u + dt / (2.4 * c.nut.k));
+        const pt = palmPoint(c.palm, c.u);
+        c.x = pt.x; c.y = pt.y; c.a = pt.a + Math.PI / 2;
+        if (c.u >= 0.97) { c.phase = 'top'; c.t = 0.9; }
+      } else if (c.phase === 'top') {
+        c.t -= dt;
+        if (c.t <= 0) {
+          if (Math.random() < 0.5) {
+            sfx.crunch();
+            burst(c.x, c.y, 16, c.nut.gold ? ['#ffd84a', '#fff4e0'] : ['#6b3f1f', '#fffaf0', '#4e2a12'], 180, 5);
+            addPop(c.x + c.palm.lean * 40 * S, c.y + 30 * S, 'CRUNCH', '#ff9b6a', 22);
+          } else {
+            // butterfingers: the coconut goes back into play
+            hanging.push({ x: c.x + c.palm.lean * 12 * S, y: c.y + 10 * S, t: 0.25, gold: c.nut.gold, dir: c.palm.lean, k: c.nut.k });
+            addPop(c.x + c.palm.lean * 40 * S, c.y + 30 * S, 'oops', '#ff9b6a', 20);
+          }
+          c.nut = null; c.phase = 'leave'; c.t = 0.6;
+        }
+      } else if (c.phase === 'leave') {
+        c.t -= dt; c.alpha = Math.max(0, c.t / 0.6); c.y -= 20 * S * dt;
+      }
+    }
+    crabs = crabs.filter(c => !(c.phase === 'leave' && c.t <= 0));
+  }
+
+  function updateDrones(dt, gy) {
+    // big drone: carries a birthday candle and drops it over you
+    bigTimer -= dt;
+    if (bigTimer <= 0) {
+      const fromLeft = Math.random() < 0.5;
+      drones.push({ kind: 'big', x: fromLeft ? -50 * S : W + 50 * S, y: H * (0.1 + Math.random() * 0.12),
+        vx: (fromLeft ? 1 : -1) * (120 + Math.min(elapsed, 120)) * S, candles: elapsed > 60 ? 2 : 1, cool: 0, spin: 0, t: 0 });
+      bigTimer = Math.max(7, 16 - elapsed / 20) + Math.random() * 5;
+    }
+    // small drone: swoops at your head or your feet
+    smallTimer -= dt;
+    if (smallTimer <= 0 && !drones.some(d => d.kind === 'small')) {
+      const fromLeft = Math.random() < 0.5;
+      drones.push({ kind: 'small', x: fromLeft ? -30 * S : W + 30 * S, y: H * 0.3, dir: fromLeft ? 1 : -1,
+        phase: 'enter', t: 0, passes: 0, limit: 1 + (Math.random() < 0.5 ? 1 : 0), aim: 'head', ty: 0, spin: 0 });
+      smallTimer = Math.max(10, 22 - elapsed / 15) + Math.random() * 6;
+    }
+    const edge = d => d.dir === 1 ? 46 * S : W - 46 * S;
+    for (const d of drones) {
+      d.spin += dt * 60; d.t += dt;
+      if (d.kind === 'big') {
+        d.x += d.vx * dt; d.y += Math.sin(d.t * 2) * 10 * S * dt;
+        d.cool -= dt;
+        if (d.candles > 0 && d.cool <= 0 && Math.abs(d.x - player.x) < 40 * S && d.x > 50 * S && d.x < W - 50 * S) {
+          d.candles--; d.cool = 1.3;
+          candles.push({ x: d.x, y: d.y + 22 * S, vx: d.vx * 0.3, vy: 0, rot: 0 });
+          sfx.whistle();
+        }
+        if (d.x < -90 * S || d.x > W + 90 * S) d.gone = true;
+        continue;
+      }
+      const headY = gy - 86 * S, footY = gy - 10 * S;
+      if (d.phase === 'enter' || d.phase === 'climb') {
+        const tx = edge(d), ty = H * 0.3;
+        d.x += (tx - d.x) * Math.min(1, dt * 4); d.y += (ty - d.y) * Math.min(1, dt * 4);
+        if (Math.abs(tx - d.x) < 3 * S && Math.abs(ty - d.y) < 3 * S) {
+          d.phase = 'aim'; d.t = 0; d.aim = Math.random() < 0.5 ? 'head' : 'feet'; d.ty = d.aim === 'head' ? headY : footY;
+        }
+      } else if (d.phase === 'aim') {
+        if (d.t > 1.1) { d.phase = 'dive'; sfx.whoosh(); }
+      } else if (d.phase === 'dive') {
+        d.y += (d.ty - d.y) * Math.min(1, dt * 9);
+        if (Math.abs(d.ty - d.y) < 2 * S) { d.y = d.ty; d.phase = 'dash'; }
+      } else if (d.phase === 'dash') {
+        d.x += d.dir * (520 + Math.min(elapsed, 100)) * S * dt;
+        const crash = d.passes + 1 >= d.limit;
+        const p = palms()[d.dir === 1 ? 1 : 0], trunk = palmPoint(p, 0.05).x;
+        const endX = crash ? trunk : W - edge(d);
+        if ((d.dir === 1 && d.x >= endX) || (d.dir === -1 && d.x <= endX)) {
+          if (crash) {
+            d.dead = true; score += 300 * mult();
+            addPop(d.x, d.y - 40 * S, 'TREE\'D +' + 300 * mult(), '#7ef0d4', 24);
+            blast(d.x, d.y);
+          } else {
+            d.passes++; score += 100 * mult();
+            addPop(player.x, feetY() - 140 * S, 'DODGED +' + 100 * mult(), '#7ef0d4', 20);
+            d.dir = -d.dir; d.phase = 'climb';
+          }
+        }
+      }
+      if ((d.phase === 'dive' || d.phase === 'dash') && !d.dead) {
+        const b = playerBox(), m = 3 * S;
+        if (d.x + 15 * S - m > b.l && d.x - 15 * S + m < b.r && d.y + 6 * S - m > b.t && d.y - 6 * S + m < b.b) {
+          hurt(d.aim === 'head' ? 'HEADSHOT' : 'ANKLE BITER');
+          d.dead = true; blast(d.x, d.y);
+        }
+      }
+    }
+    drones = drones.filter(d => !d.dead && !d.gone);
+
+    for (const c of candles) {
+      const prevY = c.y;
+      c.vy += 650 * S * dt; c.x += c.vx * dt; c.y += c.vy * dt; c.rot = Math.sin(c.y * 0.03 / S) * 0.35; c.vx *= 1 - dt;
+      const by = boardY() - 4 * S;
+      if (prevY < by && c.y >= by && Math.abs(c.x - player.x) < player.w / 2) { c.done = true; blast(c.x, by); }
+      else if (c.y >= gy) { c.done = true; blast(c.x, gy); }
+    }
+    candles = candles.filter(c => !c.done);
+
+    for (const b of blasts) {
+      b.t += dt;
+      if (b.t < 0.3 && distToPlayer(b.x, b.y) < 70 * S) hurt('GLITTERED');
+    }
+    blasts = blasts.filter(b => b.t < 0.6);
   }
 
   // ---------- drawing ----------
@@ -309,23 +578,24 @@
     for (let xx = 0; xx <= W; xx += 18 * S) {
       ctx.fillRect(xx, gy - 2 * S + Math.sin(xx * 0.05 / S + t * 2) * 2 * S, 10 * S, 2 * S);
     }
+    // glitter that has settled on the beach
+    for (const g of glitter) {
+      ctx.globalAlpha = Math.min(1, g.life / 2) * (0.5 + 0.5 * Math.sin(t * 6 + g.ph));
+      ctx.fillStyle = g.c; ctx.fillRect(g.x - 1.5 * S, g.y - 1.5 * S, 3 * S, 3 * S);
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawPalm(p, t) {
-    const c = canopy(p);
-    const base = { x: p.x - p.lean * 10 * S, y: groundY() + 6 * S };
+    const c = canopy(p), base = palmPoint(p, 0), k = { x: p.x - p.lean * 30 * S, y: (base.y + c.y) / 2 };
     ctx.strokeStyle = '#2a1430'; ctx.lineCap = 'round';
     ctx.lineWidth = 16 * S;
-    ctx.beginPath(); ctx.moveTo(base.x, base.y);
-    ctx.quadraticCurveTo(p.x - p.lean * 30 * S, (base.y + c.y) / 2, c.x, c.y); ctx.stroke();
-    // trunk rings
+    ctx.beginPath(); ctx.moveTo(base.x, base.y); ctx.quadraticCurveTo(k.x, k.y, c.x, c.y); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,140,90,0.25)'; ctx.lineWidth = 2 * S;
     for (let i = 1; i < 12; i++) {
-      const u = i / 12, ix = (1 - u) * (1 - u) * base.x + 2 * (1 - u) * u * (p.x - p.lean * 30 * S) + u * u * c.x;
-      const iy = (1 - u) * (1 - u) * base.y + 2 * (1 - u) * u * ((base.y + c.y) / 2) + u * u * c.y;
-      ctx.beginPath(); ctx.moveTo(ix - 7 * S, iy); ctx.lineTo(ix + 7 * S, iy); ctx.stroke();
+      const pt = palmPoint(p, i / 12);
+      ctx.beginPath(); ctx.moveTo(pt.x - 7 * S, pt.y); ctx.lineTo(pt.x + 7 * S, pt.y); ctx.stroke();
     }
-    // fronds
     ctx.fillStyle = '#2a1430';
     const sway = Math.sin(t * 1.3 + p.x) * 0.06;
     for (let i = 0; i < 7; i++) {
@@ -339,27 +609,55 @@
     }
   }
 
-  function drawCoconut(x, y, rot, gold, fire) {
-    const r = R();
+  function drawCoconut(x, y, rot, gold, fire, k = 1) {
+    const r = R() * k;
     ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
-    if (fire) {
-      ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 24 * S;
-    }
+    if (fire) { ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 24 * S; }
     const g = ctx.createRadialGradient(-r * 0.35, -r * 0.35, r * 0.2, 0, 0, r);
     if (gold) { g.addColorStop(0, '#fff2a8'); g.addColorStop(1, '#d99a00'); }
     else { g.addColorStop(0, '#a8703f'); g.addColorStop(1, '#4e2a12'); }
     ctx.fillStyle = g;
     ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.92, 0, 0, Math.PI * 2); ctx.fill();
     ctx.shadowBlur = 0;
-    // husk fibres
     ctx.strokeStyle = gold ? 'rgba(120,70,0,0.35)' : 'rgba(30,14,4,0.45)'; ctx.lineWidth = 1.2 * S;
-    for (let i = 0; i < 5; i++) {
-      ctx.beginPath(); ctx.arc(0, 0, r * (0.45 + i * 0.1), 0.3 + i, 0.9 + i); ctx.stroke();
-    }
+    for (let i = 0; i < 5; i++) { ctx.beginPath(); ctx.arc(0, 0, r * (0.45 + i * 0.1), 0.3 + i, 0.9 + i); ctx.stroke(); }
     // the three germination pores, the coconut's "face"
     ctx.fillStyle = gold ? '#7a4a00' : '#1f0e05';
     [[-0.28, -0.12], [0.28, -0.12], [0, 0.3]].forEach(([ex, ey]) => {
       ctx.beginPath(); ctx.ellipse(ex * r, ey * r, r * 0.12, r * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function drawCrab(c) {
+    ctx.save(); ctx.globalAlpha = c.alpha;
+    ctx.translate(c.x, c.y); ctx.rotate(c.a);
+    const s = S, wig = Math.sin(c.step) * 3 * s;
+    if (c.nut) drawCoconut(0, -24 * s, 0, c.nut.gold, false, c.nut.k * 0.9);
+    ctx.strokeStyle = '#8f2f14'; ctx.lineWidth = 2.5 * s; ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      [-1, 1].forEach(d => {
+        const lx = d * (8 + i * 4) * s;
+        ctx.beginPath(); ctx.moveTo(lx * 0.6, -2 * s);
+        ctx.lineTo(lx + d * 6 * s, -8 * s + (i % 2 ? wig : -wig));
+        ctx.lineTo(lx + d * 10 * s, 4 * s); ctx.stroke();
+      });
+    }
+    ctx.fillStyle = '#e2552d';
+    ctx.beginPath(); ctx.ellipse(0, -4 * s, 15 * s, 9 * s, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#b8401d'; ctx.beginPath(); ctx.ellipse(0, -7 * s, 10 * s, 4 * s, 0, 0, Math.PI * 2); ctx.fill();
+    // claws held up, gripping the coconut when carrying
+    ctx.fillStyle = '#e2552d';
+    [-1, 1].forEach(d => {
+      const cy = c.nut ? -18 * s : -10 * s + wig * 0.5;
+      ctx.strokeStyle = '#e2552d'; ctx.lineWidth = 3 * s;
+      ctx.beginPath(); ctx.moveTo(d * 10 * s, -6 * s); ctx.lineTo(d * 15 * s, cy); ctx.stroke();
+      ctx.beginPath(); ctx.ellipse(d * 15 * s, cy, 5 * s, 4 * s, d * 0.5, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.strokeStyle = '#2a1430'; ctx.lineWidth = 1.5 * s;
+    [-1, 1].forEach(d => {
+      ctx.beginPath(); ctx.moveTo(d * 4 * s, -10 * s); ctx.lineTo(d * 5 * s, -16 * s); ctx.stroke();
+      ctx.fillStyle = '#2a1430'; ctx.beginPath(); ctx.arc(d * 5 * s, -17 * s, 2 * s, 0, Math.PI * 2); ctx.fill();
     });
     ctx.restore();
   }
@@ -374,45 +672,91 @@
     ctx.fillStyle = '#ffb347';
     ctx.beginPath(); ctx.moveTo(19 * S, -4 * S); ctx.lineTo(28 * S, -2 * S); ctx.lineTo(19 * S, 0); ctx.fill();
     ctx.fillStyle = '#1d1033';
-    if (g.hit) {
-      ctx.font = `700 ${8 * S}px ${BODY}`; ctx.fillText('x', 13 * S, -2 * S);
-    } else { ctx.beginPath(); ctx.arc(16 * S, -5 * S, 1.6 * S, 0, Math.PI * 2); ctx.fill(); }
+    if (g.hit) { ctx.font = `700 ${8 * S}px ${BODY}`; ctx.fillText('x', 13 * S, -2 * S); }
+    else { ctx.beginPath(); ctx.arc(16 * S, -5 * S, 1.6 * S, 0, Math.PI * 2); ctx.fill(); }
     ctx.strokeStyle = '#d9dde6'; ctx.lineWidth = 4 * S; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(-4 * S, -2 * S); ctx.quadraticCurveTo(-14 * S, -10 * S - f, -26 * S, -f * 1.4); ctx.stroke();
     ctx.restore();
   }
 
+  function drawCandle(x, y, rot, t) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    const h = 26 * S, w = 7 * S;
+    ctx.fillStyle = '#fff4e0'; ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.fillStyle = '#ff4fa3';
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath(); ctx.moveTo(-w / 2, -h / 2 + i * 7 * S); ctx.lineTo(w / 2, -h / 2 + i * 7 * S + 3 * S);
+      ctx.lineTo(w / 2, -h / 2 + i * 7 * S + 6 * S); ctx.lineTo(-w / 2, -h / 2 + i * 7 * S + 3 * S); ctx.fill();
+    }
+    ctx.strokeStyle = '#2a1430'; ctx.lineWidth = 1.2 * S;
+    ctx.beginPath(); ctx.moveTo(0, -h / 2); ctx.lineTo(0, -h / 2 - 4 * S); ctx.stroke();
+    const fl = 1 + Math.sin(t * 40) * 0.2;
+    ctx.fillStyle = '#ffd84a'; ctx.beginPath(); ctx.ellipse(0, -h / 2 - 9 * S, 3.5 * S, 6 * S * fl, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff6a3d'; ctx.beginPath(); ctx.ellipse(0, -h / 2 - 8 * S, 1.8 * S, 3.5 * S * fl, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawDrone(d, t) {
+    const big = d.kind === 'big', s = big ? 1.25 * S : 0.85 * S;
+    ctx.save(); ctx.translate(d.x, d.y);
+    const tilt = big ? Math.sign(d.vx) * 0.08 : (d.phase === 'dash' ? d.dir * 0.3 : 0);
+    ctx.rotate(tilt);
+    if (big && d.candles > 0) drawCandle(0, 22 * S, 0, t);
+    ctx.strokeStyle = '#2a1430'; ctx.lineWidth = 3 * s;
+    ctx.beginPath(); ctx.moveTo(-20 * s, -4 * s); ctx.lineTo(20 * s, -4 * s); ctx.stroke();
+    ctx.fillStyle = big ? '#e8e4f0' : '#26222e';
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-11 * s, -9 * s, 22 * s, 13 * s, 4 * s) : ctx.rect(-11 * s, -9 * s, 22 * s, 13 * s); ctx.fill();
+    ctx.fillStyle = '#2a1430'; ctx.fillRect(-20 * s - 1, -9 * s, 3 * s, 6 * s); ctx.fillRect(18 * s, -9 * s, 3 * s, 6 * s);
+    // the four rotors, seen edge-on as two pairs
+    ctx.fillStyle = 'rgba(220,230,255,0.55)';
+    [-1, 1].forEach(side => [0, 1].forEach(j => {
+      const rx = side * (20 - j * 3) * s, w = Math.abs(Math.sin(d.spin + j * 1.3 + side)) * 13 * s + 3 * s;
+      ctx.beginPath(); ctx.ellipse(rx, -11 * s - j * 1.5 * s, w, 1.6 * s, 0, 0, Math.PI * 2); ctx.fill();
+    }));
+    const blink = Math.sin(t * (d.phase === 'aim' ? 30 : 8)) > 0;
+    ctx.fillStyle = big ? (blink ? '#ff4fa3' : '#7a2550') : (blink ? '#ff2a2a' : '#5a1010');
+    ctx.beginPath(); ctx.arc(0, -2 * s, 3 * s, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    if (!big && d.phase === 'aim') {
+      const label = d.aim === 'head' ? 'DUCK!' : 'JUMP!';
+      txt(label, d.x + d.dir * 34 * S, d.y - 20 * S, 14 * S, '#ff2a2a', BODY, d.dir === 1 ? 'left' : 'right');
+      ctx.setLineDash([6 * S, 6 * S]); ctx.strokeStyle = 'rgba(255,42,42,0.6)'; ctx.lineWidth = 2 * S;
+      ctx.beginPath(); ctx.moveTo(0, d.ty); ctx.lineTo(W, d.ty); ctx.stroke(); ctx.setLineDash([]);
+    }
+  }
+
   function drawSurfer() {
-    const x = board.x, gy = groundY(), handY = boardY() + 16 * S;
-    const move = Math.min(1, Math.abs(board.vx) / (300 * S));
-    const sw = Math.sin(board.walk) * move, lean = Math.max(-1, Math.min(1, board.vx / (900 * S)));
-    const bob = Math.abs(Math.cos(board.walk)) * move * 2 * S;
-    const hipY = gy - 36 * S - bob, shY = gy - 70 * S - bob, headY = gy - 84 * S - bob;
+    const x = player.x, gy = groundY(), f = feetY(), c = player.c, handY = boardY() + 16 * S;
+    const move = player.py > 0 ? 0 : Math.min(1, Math.abs(player.vx) / (300 * S));
+    const sw = Math.sin(player.walk) * move, lean = Math.max(-1, Math.min(1, player.vx / (900 * S)));
+    const bob = Math.abs(Math.cos(player.walk)) * move * 2 * S;
+    const hipY = f - (36 - 14 * c) * S - bob, shY = hipY - (34 - 2 * c) * S, headY = shY - 14 * S;
     const skin = '#c98a5a', dark = '#2a1430';
+    const shadowW = player.w * 0.42 / (1 + player.py / (120 * S));
     ctx.fillStyle = 'rgba(60,20,40,0.28)';
-    ctx.beginPath(); ctx.ellipse(x, gy + 4 * S, board.w * 0.42, 6 * S, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.lineCap = 'round'; ctx.strokeStyle = skin; ctx.lineWidth = 7 * S;
-    // legs, swinging when running
+    ctx.beginPath(); ctx.ellipse(x, gy + 4 * S, shadowW, 6 * S, 0, 0, Math.PI * 2); ctx.fill();
+    if (hurtT > 0 && Math.sin(hurtT * 30) > 0) ctx.globalAlpha = 0.35;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = skin; ctx.lineWidth = 7 * S;
+    // legs: swing when running, bend when ducking, tuck when jumping
+    const tuck = player.py > 0 ? Math.min(1, player.py / (40 * S)) : 0;
     [[-5, 1], [5, -1]].forEach(([dx, d]) => {
+      const footX = x + dx * S + d * sw * 12 * S, kneeOut = (c * 9 + tuck * 6) * S * Math.sign(dx);
       ctx.beginPath(); ctx.moveTo(x + dx * S, hipY);
-      ctx.lineTo(x + dx * S + d * sw * 12 * S, gy - 2 * S); ctx.stroke();
+      ctx.lineTo((x + dx * S + footX) / 2 + kneeOut, (hipY + f) / 2 - tuck * 4 * S);
+      ctx.lineTo(footX, f - 2 * S - tuck * 8 * S); ctx.stroke();
     });
-    // arms up to the board
     ctx.lineWidth = 6 * S;
     [-1, 1].forEach(d => {
       ctx.beginPath(); ctx.moveTo(x + d * 10 * S, shY + 3 * S);
       ctx.quadraticCurveTo(x + d * 22 * S, shY - 8 * S, x + d * 26 * S, handY); ctx.stroke();
     });
-    // torso
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.ellipse(x + lean * 2 * S, (shY + hipY) / 2, 12 * S, (hipY - shY) / 2 + 2 * S, lean * 0.08, 0, Math.PI * 2); ctx.fill();
-    // board shorts
     ctx.fillStyle = xtremeT > 0 ? '#ffd84a' : '#ff6a3d';
     ctx.beginPath(); ctx.moveTo(x - 12 * S, hipY - 7 * S); ctx.lineTo(x + 12 * S, hipY - 7 * S);
     ctx.lineTo(x + 13 * S, hipY + 10 * S); ctx.lineTo(x + 1 * S, hipY + 10 * S); ctx.lineTo(x, hipY + 3 * S);
     ctx.lineTo(x - 1 * S, hipY + 10 * S); ctx.lineTo(x - 13 * S, hipY + 10 * S); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#fff4e0'; ctx.fillRect(x - 12 * S, hipY - 2 * S, 24 * S, 2.5 * S);
-    // head, looking up at the coconuts
     const hx = x + lean * 3 * S;
     ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, headY, 10 * S, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = dark;
@@ -421,14 +765,17 @@
     ctx.fillRect(hx - 9 * S, headY - 1 * S, 18 * S, 4 * S); // shades
     ctx.fillStyle = '#7ef0d4'; ctx.fillRect(hx - 7 * S, headY, 5 * S, 1.5 * S); ctx.fillRect(hx + 2 * S, headY, 5 * S, 1.5 * S);
     ctx.strokeStyle = dark; ctx.lineWidth = 1.5 * S;
-    ctx.beginPath(); ctx.arc(hx, headY + 4 * S, 3.5 * S, 0.2, Math.PI - 0.2); ctx.stroke();
+    ctx.beginPath();
+    if (hurtT > 0) ctx.arc(hx, headY + 7 * S, 3 * S, Math.PI + 0.3, -0.3); else ctx.arc(hx, headY + 4 * S, 3.5 * S, 0.2, Math.PI - 0.2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
   }
 
   function drawBoard() {
     drawSurfer();
-    const y = boardY(), w = board.w, h = 18 * S, x = board.x;
+    const y = boardY(), w = player.w, h = 18 * S, x = player.x;
     ctx.save(); ctx.translate(x, y + h / 2);
-    ctx.rotate(Math.max(-0.12, Math.min(0.12, board.vx / (8000 * S))));
+    ctx.rotate(Math.max(-0.12, Math.min(0.12, player.vx / (8000 * S))));
     ctx.fillStyle = xtremeT > 0 ? '#ff6a3d' : '#2ec4b6';
     ctx.beginPath(); ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff4e0';
@@ -436,6 +783,22 @@
     ctx.fillStyle = xtremeT > 0 ? '#ffd84a' : '#ff6a3d';
     ctx.fillRect(-4 * S, -h / 2 + 1, 8 * S, h - 2);
     ctx.restore();
+  }
+
+  function drawBlasts() {
+    for (const b of blasts) {
+      const k = b.t / 0.6;
+      ctx.globalAlpha = 1 - k;
+      ctx.strokeStyle = b.t < 0.3 ? '#ff4fa3' : '#ffd84a'; ctx.lineWidth = 4 * S;
+      ctx.beginPath(); ctx.arc(b.x, b.y, 70 * S * Math.min(1, b.t / 0.2), 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = '#fff4e0';
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4, r1 = 20 * S + k * 60 * S;
+        ctx.beginPath(); ctx.arc(b.x + Math.cos(a) * r1, b.y + Math.sin(a) * r1, 3 * S * (1 - k), 0, Math.PI * 2); ctx.fill();
+      }
+      if (b.t < 0.12) { ctx.globalAlpha = 1 - b.t / 0.12; ctx.beginPath(); ctx.arc(b.x, b.y, 34 * S, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.globalAlpha = 1;
   }
 
   function txt(s, x, y, size, color, font = DISPLAY, align = 'center', outline = true) {
@@ -449,13 +812,13 @@
     const pad = Math.max(16, 18 * S);
     txt(String(score), pad, pad + 14 * S, 30 * S, '#fff4e0', DISPLAY, 'left');
     txt('BEST ' + best, pad, pad + 42 * S, 13 * S, '#ffd2a8', BODY, 'left');
-    for (let i = 0; i < 3; i++) {
+    const gap = Math.min(26 * S, (W * 0.3) / LIVES);
+    for (let i = 0; i < LIVES; i++) {
       ctx.globalAlpha = i < lives ? 1 : 0.25;
-      drawCoconutIcon(W - pad - 12 * S - i * 30 * S, pad + 14 * S);
+      drawCoconutIcon(W - pad - 10 * S - i * gap, pad + 14 * S);
     }
     ctx.globalAlpha = 1;
-    // xtreme meter
-    const mw = Math.min(200 * S, W * 0.36), mh = 10 * S, mx = W / 2 - mw / 2, my = pad + 6 * S;
+    const mw = Math.min(200 * S, W * 0.3), mh = 10 * S, mx = W / 2 - mw / 2, my = pad + 6 * S;
     ctx.fillStyle = 'rgba(29,16,51,0.6)'; ctx.fillRect(mx, my, mw, mh);
     const fill = xtremeT > 0 ? xtremeT / 9 : meter;
     ctx.fillStyle = xtremeT > 0 ? '#ffd84a' : '#ff6a3d'; ctx.fillRect(mx, my, mw * fill, mh);
@@ -464,29 +827,42 @@
     if (mult() > 1) txt('x' + mult(), W / 2, my + mh + 34 * S, 20 * S, '#7ef0d4');
   }
   function drawCoconutIcon(x, y) {
-    const r = 11 * S;
+    const r = 10 * S;
     ctx.fillStyle = '#6b3f1f'; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#1f0e05';
     [[-0.3, -0.1], [0.3, -0.1], [0, 0.32]].forEach(([ex, ey]) => { ctx.beginPath(); ctx.arc(x + ex * r, y + ey * r, r * 0.13, 0, Math.PI * 2); ctx.fill(); });
+  }
+  function drawTouchButtons() {
+    [[duckBtn(), 'DUCK', duckPointer !== null], [jumpBtn(), 'JUMP', player.py > 0]].forEach(([b, label, on]) => {
+      ctx.fillStyle = on ? 'rgba(255,106,61,0.75)' : 'rgba(29,16,51,0.45)';
+      ctx.beginPath(); ctx.arc(b.x, b.y, btnR(), 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff4e0'; ctx.lineWidth = 2; ctx.stroke();
+      txt(label, b.x, b.y, Math.max(12, 13 * S), '#fff4e0', BODY, 'center', false);
+    });
   }
 
   function drawOverlay(t) {
     ctx.fillStyle = 'rgba(29,16,51,0.55)'; ctx.fillRect(0, 0, W, H);
     const big = Math.min(54 * S, W / 7.5);
     if (state === 'title') {
-      const wob = reduceMotion ? 0 : Math.sin(t * 3) * 4 * S;
-      txt('COCONUT', W / 2, H * 0.3 + wob, big, '#fff4e0');
-      txt('XTREME', W / 2, H * 0.3 + big * 1.05 - wob, big * 1.08, '#ff6a3d');
+      const top = H * 0.24, wob = reduceMotion ? 0 : Math.sin(t * 3) * 4 * S;
+      txt('COCONUT', W / 2, top + wob, big, '#fff4e0');
+      txt('XTREME', W / 2, top + big * 1.05 - wob, big * 1.08, '#ff6a3d');
       const lines = [
-        'Keep the coconuts in the air with your surfboard.',
-        'Bonk seagulls for 250. Gold coconuts score x5.',
-        'Fill the meter to go XTREME. Three splats and you are done.',
+        'Keep the coconuts up with your surfboard.',
+        'Little ones fly high. Big ones bounce low.',
+        'Drop one and a coconut crab steals it.',
+        'Dodge candle bombs and their glitter.',
+        'Duck or jump when a small drone swoops.',
+        'Bonk seagulls and drones with coconuts.',
       ];
-      const fs = Math.max(13, Math.min(16 * S, W / 30));
-      lines.forEach((l, i) => txt(l, W / 2, H * 0.3 + big * 2.2 + i * fs * 1.7, fs, '#ffe3c4', BODY, 'center', false));
+      const fs = Math.max(13, Math.min(16 * S, W / 28));
+      lines.forEach((l, i) => txt(l, W / 2, top + big * 2.2 + i * fs * 1.6, fs, '#ffe3c4', BODY, 'center', false));
       const blink = reduceMotion || Math.sin(t * 5) > -0.3;
-      if (blink) txt('TAP, CLICK OR PRESS SPACE', W / 2, H * 0.3 + big * 2.2 + 4.4 * fs * 1.7, fs * 1.15, '#ffd84a', BODY);
-      txt('Mouse, touch or arrow keys to move · P pauses · M mutes', W / 2, H - 24 * S, Math.max(11, 11 * S), '#c9a7d6', BODY, 'center', false);
+      if (blink) txt('TAP, CLICK OR PRESS SPACE', W / 2, top + big * 2.2 + 7 * fs * 1.6, fs * 1.15, '#ffd84a', BODY);
+      const help = W < 520 ? ['Drag to move · JUMP and DUCK buttons', 'Keys: A/D move · W jump · S duck · P pause · M mute']
+        : ['Move with the mouse, touch, A/D or arrows · W or Up jumps · S or Down ducks · P pauses · M mutes'];
+      help.forEach((h, i) => txt(h, W / 2, H - (18 + (help.length - 1 - i) * 16) * Math.max(1, S) - 6, Math.max(11, 11 * S), '#c9a7d6', BODY, 'center', false));
     } else if (state === 'over') {
       txt('WIPEOUT', W / 2, H * 0.32, big, '#ff6a3d');
       txt(String(score), W / 2, H * 0.32 + big * 1.3, big * 0.9, '#fff4e0');
@@ -502,42 +878,45 @@
     ctx.save();
     if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * S, (Math.random() - 0.5) * shake * S);
     drawSky(t);
+    for (const g of grounded) drawCoconut(g.x, g.y, g.rot, g.gold, false, g.k);
     const ps = palms();
-    for (const h of (hanging || [])) {
+    for (const h of hanging) {
       const jig = Math.sin(t * 40) * (h.t < 0.6 ? 3 : 1) * S;
-      drawCoconut(h.x + jig, h.y, 0, h.gold, false);
+      drawCoconut(h.x + jig, h.y, 0, h.gold, false, h.k);
     }
     ps.forEach(p => drawPalm(p, t));
     if (state === 'title') {
-      // a couple of idle coconuts in the canopy to set the scene
-      ps.forEach((p, i) => { const c = canopy(p); drawCoconut(c.x - 10 * S + i * 20 * S, c.y + 16 * S, 0, false, false); });
+      ps.forEach((p, i) => { const c = canopy(p); drawCoconut(c.x - 10 * S + i * 20 * S, c.y + 16 * S, 0, false, false, 0.8 + i * 0.4); });
     }
-    for (const g of (gulls || [])) drawGull(g);
-    for (const n of (nuts || [])) {
+    for (const c of crabs) drawCrab(c);
+    for (const g of gulls) drawGull(g);
+    for (const c of candles) drawCandle(c.x, c.y, c.rot, t);
+    for (const d of drones) drawDrone(d, t);
+    for (const n of nuts) {
       if (xtremeT > 0) {
         n.trail.forEach((p, i) => {
           ctx.globalAlpha = i / n.trail.length * 0.5;
           ctx.fillStyle = i % 2 ? '#ffd84a' : '#ff6a3d';
-          ctx.beginPath(); ctx.arc(p.x, p.y, R() * (0.4 + i / n.trail.length * 0.6), 0, Math.PI * 2); ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, R() * n.k * (0.4 + i / n.trail.length * 0.6), 0, Math.PI * 2); ctx.fill();
         });
         ctx.globalAlpha = 1;
       }
-      drawCoconut(n.x, n.y, n.rot, n.gold, xtremeT > 0);
+      drawCoconut(n.x, n.y, n.rot, n.gold, xtremeT > 0, n.k);
     }
     drawBoard();
-    for (const p of (parts || [])) {
-      ctx.globalAlpha = Math.max(0, p.life / p.max);
+    drawBlasts();
+    for (const p of parts) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, p.life / p.max * (p.glitter ? 3 : 1)));
       ctx.fillStyle = p.c; ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
     }
     ctx.globalAlpha = 1;
-    for (const p of (pops || [])) {
-      ctx.globalAlpha = Math.min(1, p.life * 2);
-      txt(p.text, p.x, p.y, p.size * S, p.color);
-    }
+    for (const p of pops) { ctx.globalAlpha = Math.min(1, p.life * 2); txt(p.text, p.x, p.y, p.size * S, p.color); }
     ctx.globalAlpha = 1;
     ctx.restore();
     if (flash > 0) { ctx.fillStyle = `rgba(255,216,74,${flash * 0.35})`; ctx.fillRect(0, 0, W, H); }
+    if (hurtFlash > 0) { ctx.fillStyle = `rgba(255,79,163,${hurtFlash * 0.3})`; ctx.fillRect(0, 0, W, H); }
     if (state !== 'title') drawHUD();
+    if (state === 'play' && touchSeen) drawTouchButtons();
     if (state !== 'play') drawOverlay(t);
   }
 
@@ -548,7 +927,7 @@
     draw(now / 1000);
     requestAnimationFrame(frame);
   }
-  board.x = W / 2;
+  player.x = W / 2;
   const go = () => requestAnimationFrame(frame);
   (document.fonts && document.fonts.load ? Promise.all([document.fonts.load(`20px ${DISPLAY}`), document.fonts.load(`700 16px ${BODY}`)]).catch(() => {}) : Promise.resolve()).then(go, go);
   cvs.focus();
