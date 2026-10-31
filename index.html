@@ -107,10 +107,10 @@
   let state = 'title', overTimer = 0;
   let score, lives, combo, meter, xtremeT, elapsed, shake, flash;
   let nuts, gulls, parts, pops, hanging, gullTimer, dropTimer;
-  const board = { x: 0, vx: 0, w: 0 };
+  const board = { x: 0, vx: 0, w: 0, walk: 0 };
 
   const groundY = () => H - 56 * S;
-  const boardY = () => groundY() - 26 * S;
+  const boardY = () => groundY() - 112 * S;
   const R = () => 17 * S;
   const gravity = () => 1050 * S * (1 + Math.min(elapsed / 150, 0.6));
   const maxNuts = () => Math.min(1 + Math.floor(elapsed / 22), 5);
@@ -155,12 +155,13 @@
     if (state === 'over') overTimer += dt;
     // board movement runs on the title screen too, so it feels alive
     const prevX = board.x;
-    board.w = 128 * S * (xtremeT > 0 ? 1.18 : 1);
+    board.w = 164 * S * (xtremeT > 0 ? 1.18 : 1);
     if (keys.ArrowLeft || keys.a) board.x -= 720 * S * dt;
     if (keys.ArrowRight || keys.d) board.x += 720 * S * dt;
     if (pointerX !== null) board.x += (pointerX - board.x) * Math.min(1, dt * 22);
     board.x = Math.max(board.w / 2, Math.min(W - board.w / 2, board.x || W / 2));
     board.vx = (board.x - prevX) / Math.max(dt, 1e-4);
+    board.walk += Math.min(Math.abs(board.vx), 900 * S) * dt / (16 * S);
 
     if (state !== 'play') return;
     elapsed += dt;
@@ -303,7 +304,7 @@
     ctx.fillStyle = '#f2c98a';
     ctx.beginPath(); ctx.moveTo(0, gy);
     for (let xx = 0; xx <= W; xx += 20 * S) ctx.lineTo(xx, gy + Math.sin(xx * 0.03 / S) * 3 * S);
-    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.fill();
+    ctx.lineTo(W, gy); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.fill();
     ctx.fillStyle = 'rgba(255,255,255,0.5)';
     for (let xx = 0; xx <= W; xx += 18 * S) {
       ctx.fillRect(xx, gy - 2 * S + Math.sin(xx * 0.05 / S + t * 2) * 2 * S, 10 * S, 2 * S);
@@ -381,13 +382,53 @@
     ctx.restore();
   }
 
+  function drawSurfer() {
+    const x = board.x, gy = groundY(), handY = boardY() + 16 * S;
+    const move = Math.min(1, Math.abs(board.vx) / (300 * S));
+    const sw = Math.sin(board.walk) * move, lean = Math.max(-1, Math.min(1, board.vx / (900 * S)));
+    const bob = Math.abs(Math.cos(board.walk)) * move * 2 * S;
+    const hipY = gy - 36 * S - bob, shY = gy - 70 * S - bob, headY = gy - 84 * S - bob;
+    const skin = '#c98a5a', dark = '#2a1430';
+    ctx.fillStyle = 'rgba(60,20,40,0.28)';
+    ctx.beginPath(); ctx.ellipse(x, gy + 4 * S, board.w * 0.42, 6 * S, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.lineCap = 'round'; ctx.strokeStyle = skin; ctx.lineWidth = 7 * S;
+    // legs, swinging when running
+    [[-5, 1], [5, -1]].forEach(([dx, d]) => {
+      ctx.beginPath(); ctx.moveTo(x + dx * S, hipY);
+      ctx.lineTo(x + dx * S + d * sw * 12 * S, gy - 2 * S); ctx.stroke();
+    });
+    // arms up to the board
+    ctx.lineWidth = 6 * S;
+    [-1, 1].forEach(d => {
+      ctx.beginPath(); ctx.moveTo(x + d * 10 * S, shY + 3 * S);
+      ctx.quadraticCurveTo(x + d * 22 * S, shY - 8 * S, x + d * 26 * S, handY); ctx.stroke();
+    });
+    // torso
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.ellipse(x + lean * 2 * S, (shY + hipY) / 2, 12 * S, (hipY - shY) / 2 + 2 * S, lean * 0.08, 0, Math.PI * 2); ctx.fill();
+    // board shorts
+    ctx.fillStyle = xtremeT > 0 ? '#ffd84a' : '#ff6a3d';
+    ctx.beginPath(); ctx.moveTo(x - 12 * S, hipY - 7 * S); ctx.lineTo(x + 12 * S, hipY - 7 * S);
+    ctx.lineTo(x + 13 * S, hipY + 10 * S); ctx.lineTo(x + 1 * S, hipY + 10 * S); ctx.lineTo(x, hipY + 3 * S);
+    ctx.lineTo(x - 1 * S, hipY + 10 * S); ctx.lineTo(x - 13 * S, hipY + 10 * S); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff4e0'; ctx.fillRect(x - 12 * S, hipY - 2 * S, 24 * S, 2.5 * S);
+    // head, looking up at the coconuts
+    const hx = x + lean * 3 * S;
+    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, headY, 10 * S, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = dark;
+    ctx.beginPath(); ctx.arc(hx, headY - 2 * S, 10.5 * S, Math.PI * 1.05, Math.PI * 1.95); ctx.fill();
+    for (let i = -1; i <= 1; i++) { ctx.beginPath(); ctx.arc(hx + i * 6 * S, headY - 10 * S, 4 * S, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillRect(hx - 9 * S, headY - 1 * S, 18 * S, 4 * S); // shades
+    ctx.fillStyle = '#7ef0d4'; ctx.fillRect(hx - 7 * S, headY, 5 * S, 1.5 * S); ctx.fillRect(hx + 2 * S, headY, 5 * S, 1.5 * S);
+    ctx.strokeStyle = dark; ctx.lineWidth = 1.5 * S;
+    ctx.beginPath(); ctx.arc(hx, headY + 4 * S, 3.5 * S, 0.2, Math.PI - 0.2); ctx.stroke();
+  }
+
   function drawBoard() {
-    const y = boardY(), w = board.w, h = 14 * S, x = board.x;
+    drawSurfer();
+    const y = boardY(), w = board.w, h = 18 * S, x = board.x;
     ctx.save(); ctx.translate(x, y + h / 2);
-    ctx.rotate(Math.max(-0.18, Math.min(0.18, board.vx / (6000 * S))));
-    // shadow on sand
-    ctx.fillStyle = 'rgba(60,20,40,0.25)';
-    ctx.beginPath(); ctx.ellipse(0, groundY() - y + 4 * S, w * 0.45, 5 * S, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.rotate(Math.max(-0.12, Math.min(0.12, board.vx / (8000 * S))));
     ctx.fillStyle = xtremeT > 0 ? '#ff6a3d' : '#2ec4b6';
     ctx.beginPath(); ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#fff4e0';
