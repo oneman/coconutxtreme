@@ -2,7 +2,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bungee&family=Chakra+Petch:wght@500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Pixelify+Sans:wght@500;700&display=swap">
 <style>
   /* Layout: one full-bleed canvas, the beach is the whole screen. Single dusk look by choice. */
   :root {
@@ -11,11 +11,12 @@
     --sand: #f2c98a;
     --husk: #6b3f1f;
     --foam: #fff4e0;
-    --display: "Bungee", "Impact", "Arial Black", sans-serif;
-    --body: "Chakra Petch", "Trebuchet MS", system-ui, sans-serif;
+    --display: "Press Start 2P", "Courier New", monospace;
+    --body: "Pixelify Sans", "Courier New", monospace;
     color-scheme: dark;
   }
   html, body { height: 100%; }
+  body { position: relative; }
   body {
     margin: 0;
     background: var(--dusk);
@@ -26,29 +27,41 @@
     user-select: none;
     -webkit-user-select: none;
   }
-  #game { display: block; width: 100%; height: 100%; cursor: none; outline: none; }
+  /* the world renders at roughly SNES resolution and is scaled up with hard pixel edges */
+  #game, #ui { position: absolute; inset: 0; display: block; width: 100%; height: 100%; }
+  #game { cursor: none; outline: none; image-rendering: pixelated; image-rendering: crisp-edges; }
+  #ui { pointer-events: none; }
   #game:focus-visible { box-shadow: inset 0 0 0 3px var(--ember); }
 </style>
 
 <canvas id="game" tabindex="0" aria-label="Coconut Xtreme game. Move the surfer with the mouse, touch, or A and D. W jumps, S ducks. Keep the coconuts in the air and dodge the drones."></canvas>
+<canvas id="ui" aria-hidden="true"></canvas>
 
 <script>
 (() => {
   const cvs = document.getElementById('game');
-  const ctx = cvs.getContext('2d');
+  const gctx = cvs.getContext('2d');
+  const uiCvs = document.getElementById('ui'), uctx = uiCvs.getContext('2d');
+  let ctx = gctx;
   const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const DISPLAY = '"Bungee", Impact, "Arial Black", sans-serif';
-  const BODY = '"Chakra Petch", "Trebuchet MS", system-ui, sans-serif';
+  const DISPLAY = '"Press Start 2P", "Courier New", monospace';
+  const BODY = '"Pixelify Sans", "Courier New", monospace';
   const LIVES = 3;
   const GLITTER = ['#ff4fa3', '#ffd84a', '#7ef0d4', '#b98cff', '#ffffff', '#5ad1ff'];
 
-  let W = 0, H = 0, S = 1, DPR = 1;
+  // P is the size of one "SNES pixel" in CSS pixels; the world canvas is about 270 pixels tall
+  let W = 0, H = 0, S = 1, DPR = 1, P = 3, stars = [];
   function resize() {
     DPR = Math.min(window.devicePixelRatio || 1, 2);
     W = cvs.clientWidth; H = cvs.clientHeight;
-    cvs.width = Math.round(W * DPR); cvs.height = Math.round(H * DPR);
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    P = Math.max(2, Math.round(H / 270));
+    cvs.width = Math.ceil(W / P); cvs.height = Math.ceil(H / P);
+    gctx.setTransform(1 / P, 0, 0, 1 / P, 0, 0);
+    gctx.imageSmoothingEnabled = false;
+    uiCvs.width = Math.round(W * DPR); uiCvs.height = Math.round(H * DPR);
+    uctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     S = Math.max(0.55, Math.min(W / 460, H / 720));
+    stars = Array.from({ length: Math.round(W / 9) }, () => ({ x: Math.random() * W, y: Math.random() * H * 0.45, ph: Math.random() * 6, big: Math.random() < 0.15 }));
   }
   addEventListener('resize', resize);
   resize();
@@ -210,8 +223,9 @@
   function queueDrop() {
     const p = palms()[Math.random() < 0.5 ? 0 : 1], c = canopy(p);
     const gold = Math.random() < 0.12 && elapsed > 10;
+    const pumpkin = !gold && Math.random() < 0.3;
     const k = 0.72 + Math.random() * 0.6;
-    hanging.push({ x: c.x + (Math.random() - 0.5) * 30 * S, y: c.y + 18 * S, t: 1.1, gold, dir: p.lean, k });
+    hanging.push({ x: c.x + (Math.random() - 0.5) * 30 * S, y: c.y + 18 * S, t: 1.1, gold, pumpkin, dir: p.lean, k });
   }
 
   function addPop(x, y, text, color, size = 22) { pops.push({ x, y, text, color, size, life: 1 }); }
@@ -278,7 +292,7 @@
     if (dropTimer <= 0 && inPlay < maxNuts()) { queueDrop(); dropTimer = 1.6; }
     for (const h of hanging) {
       h.t -= dt;
-      if (h.t <= 0) nuts.push({ x: h.x, y: h.y, vx: h.dir * (60 + Math.random() * 80) * S, vy: 0, rot: 0, gold: h.gold, k: h.k, trail: [] });
+      if (h.t <= 0) nuts.push({ x: h.x, y: h.y, vx: h.dir * (60 + Math.random() * 80) * S, vy: 0, rot: 0, gold: h.gold, pumpkin: h.pumpkin, k: h.k, trail: [] });
     }
     hanging = hanging.filter(h => h.t > 0);
 
@@ -323,9 +337,10 @@
         n.vx = (off * 300 * S + player.vx * 0.25) / n.k;
         n.vx = Math.max(-560 * S, Math.min(560 * S, n.vx));
         combo++;
-        const pts = 10 * mult() * (n.gold ? 5 : 1);
+        const pts = 10 * mult() * (n.gold ? 5 : n.pumpkin ? 3 : 1);
         score += pts;
         if (n.gold) { sfx.gold(); burst(n.x, by, 14, ['#ffd84a', '#fff4b0']); addPop(n.x, by - 40 * S, 'GOLD +' + pts, '#ffd84a', 24); }
+        else if (n.pumpkin) { sfx.bounce(combo, n.k * 1.4); addPop(n.x, by - 30 * S, '+' + pts, '#ff8c1a', 18); }
         else { sfx.bounce(combo, n.k); addPop(n.x, by - 30 * S, '+' + pts, '#fff4e0', 16); }
         burst(n.x, by, 5, ['#fff4e0', '#f2c98a'], 140, 3);
         if (xtremeT <= 0) {
@@ -357,12 +372,26 @@
         blast(d.x, d.y);
       }
 
+      // now and then a coconut gets cursed into a pumpkin mid-air
+      if (!n.gold && !n.pumpkin && Math.random() < dt * 0.05) {
+        n.pumpkin = true;
+        burst(n.x, n.y, 14, ['#b98cff', '#7ef0d4', '#ffffff'], 160, 4);
+        addPop(n.x, n.y - 30 * S, 'CURSED!', '#b98cff', 16);
+        beep(660, 0.25, 'sine', 0.05, -400);
+      }
       if (n.y + r * 0.4 >= gy) n.landed = true;
     }
     for (const n of nuts) {
       if (!n.landed) continue;
       const r = R() * n.k;
       combo = 0;
+      if (n.pumpkin) {
+        // pumpkins don't survive the fall, so there is nothing for the crabs
+        sfx.thud(); noise(0.2, 0.1, 1200);
+        burst(n.x, gy, 26, ['#ff8c1a', '#e8650f', '#ffe066', '#fff4c0'], 300, 5);
+        addPop(n.x, gy - 50 * S, 'SQUASH', '#ff8c1a', 22);
+        continue;
+      }
       sfx.thud(); shake = reduceMotion ? 0 : 6;
       burst(n.x, gy, 14, ['#f2c98a', '#e0b070', '#fff4e0'], 200, 4);
       addPop(n.x, gy - 50 * S, 'THUD', '#fff4e0', 24);
@@ -537,56 +566,177 @@
   }
 
   // ---------- drawing ----------
-  function drawSky(t) {
-    const x = xtremeT > 0;
-    const g = ctx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, x ? '#3a0a2a' : '#1d1033');
-    g.addColorStop(0.45, x ? '#c2185b' : '#7b2d6b');
-    g.addColorStop(0.68, x ? '#ff8f00' : '#ff6a3d');
-    g.addColorStop(0.72, '#ffb35c');
-    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // SNES skies are bands of flat color with a checkerboard dither where two bands meet
+  function bands(y0, y1, cols) {
+    const h = (y1 - y0) / cols.length;
+    cols.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(0, Math.floor(y0 + i * h), W, Math.ceil(h) + P); });
+    for (let i = 1; i < cols.length; i++) {
+      const y = Math.floor((y0 + i * h) / P) * P;
+      ctx.fillStyle = cols[i - 1];
+      for (let row = 0; row < 2; row++) {
+        for (let x = ((row + i) % 2) * P; x < W; x += 2 * P) ctx.fillRect(x, y + row * P, P, P);
+      }
+    }
+  }
+  const SKY = ['#0c0718', '#140b26', '#1d1033', '#2a1442', '#3d1a4d', '#5a2156', '#7a2a55', '#a33b4e', '#cc5a3f', '#ee8a3a'];
+  const SKY_X = ['#1a0414', '#2c0820', '#45102e', '#64143a', '#8a1a44', '#b0204a', '#d23048', '#ee5040', '#ff7a30', '#ffa030'];
 
-    // sun, half sunk into the sea
-    const seaY = H * 0.7;
+  function drawPumpkin(x, y, r, rot, t, glow = 1) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    const el = (ex, ey, rx, ry) => { ctx.beginPath(); ctx.ellipse(ex, ey, rx, ry, 0, 0, Math.PI * 2); ctx.fill(); };
+    ctx.fillStyle = '#4a6b2a'; ctx.fillRect(-r * 0.12, -r * 1.12, r * 0.24, r * 0.36);
+    ctx.fillStyle = '#7a3008'; el(0, 0, r * 1.08, r * 0.9);
+    ctx.fillStyle = '#d0560c'; el(-r * 0.45, 0, r * 0.58, r * 0.86); el(r * 0.45, 0, r * 0.58, r * 0.86);
+    ctx.fillStyle = '#ff8c1a'; el(0, 0, r * 0.52, r * 0.9);
+    ctx.fillStyle = '#ffb347'; el(-r * 0.18, -r * 0.5, r * 0.14, r * 0.2);
+    // carved face, lit from inside
+    const f = 0.85 + Math.sin(t * 13 + x) * 0.08 + Math.sin(t * 29) * 0.07;
+    ctx.fillStyle = glow > 1 ? `rgba(255,${Math.round(230 * f)},90,1)` : '#ffe066';
+    const tri = (a, b, c) => { ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.lineTo(...c); ctx.fill(); };
+    tri([-r * 0.55, -r * 0.05], [-r * 0.18, -r * 0.05], [-r * 0.36, -r * 0.42]);
+    tri([r * 0.55, -r * 0.05], [r * 0.18, -r * 0.05], [r * 0.36, -r * 0.42]);
+    tri([-r * 0.08, r * 0.14], [r * 0.08, r * 0.14], [0, r * 0.02]);
+    ctx.beginPath(); ctx.moveTo(-r * 0.62, r * 0.24);
+    [[-0.45, 0.36], [-0.3, 0.26], [-0.15, 0.4], [0, 0.28], [0.15, 0.4], [0.3, 0.26], [0.45, 0.36], [0.62, 0.24],
+      [0.4, 0.62], [0.2, 0.52], [0, 0.66], [-0.2, 0.52], [-0.4, 0.62]].forEach(([a, b]) => ctx.lineTo(a * r, b * r));
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  function drawCastle(t, seaY) {
+    const x0 = W * 0.76, s = S;
+    ctx.fillStyle = '#120a1e';
+    ctx.beginPath(); ctx.ellipse(x0, seaY + 2 * s, 80 * s, 12 * s, 0, Math.PI, 0); ctx.fill();
+    ctx.fillRect(x0 - 26 * s, seaY - 46 * s, 52 * s, 46 * s);
+    const tower = (x, w, h) => {
+      ctx.fillRect(x, seaY - h, w, h);
+      ctx.beginPath(); ctx.moveTo(x - 3 * s, seaY - h); ctx.lineTo(x + w / 2, seaY - h - w * 1.3); ctx.lineTo(x + w + 3 * s, seaY - h); ctx.fill();
+    };
+    tower(x0 - 40 * s, 16 * s, 66 * s); tower(x0 + 22 * s, 18 * s, 84 * s); tower(x0 - 8 * s, 14 * s, 60 * s);
+    for (let i = 0; i < 5; i++) ctx.fillRect(x0 - 26 * s + i * 11 * s, seaY - 52 * s, 6 * s, 6 * s);
+    // windows: some flicker, one goes dark now and then
+    const wins = [[-34, -50], [-34, -36], [28, -66], [28, -48], [-3, -44], [-16, -24], [10, -24]];
+    wins.forEach(([wx, wy], i) => {
+      const on = Math.sin(t * (0.7 + i * 0.37) + i * 2) > -0.6;
+      ctx.fillStyle = on ? (i % 3 ? '#ffd84a' : '#b6ff6a') : '#2a1430';
+      ctx.fillRect(x0 + wx * s, seaY + wy * s, 4 * s, 6 * s);
+    });
+  }
+
+  function drawBat(x, y, sz, flap) {
+    const w = Math.sin(flap) * 0.6;
+    ctx.fillStyle = '#0a0512';
+    ctx.beginPath(); ctx.ellipse(x, y, sz * 0.35, sz * 0.45, 0, 0, Math.PI * 2); ctx.fill();
+    [-1, 1].forEach(d => {
+      ctx.beginPath(); ctx.moveTo(x, y - sz * 0.1);
+      ctx.lineTo(x + d * sz * 0.9, y - sz * (0.5 + w)); ctx.lineTo(x + d * sz * 1.5, y - sz * w * 0.4);
+      ctx.lineTo(x + d * sz * 1.0, y + sz * 0.1); ctx.lineTo(x + d * sz * 0.6, y - sz * 0.05); ctx.closePath(); ctx.fill();
+    });
+    ctx.fillStyle = '#ff2a2a'; ctx.fillRect(x - sz * 0.2, y - sz * 0.15, sz * 0.12, sz * 0.12); ctx.fillRect(x + sz * 0.08, y - sz * 0.15, sz * 0.12, sz * 0.12);
+  }
+
+  function drawGhost(x, y, t, ph) {
+    const r = 14 * S;
+    ctx.globalAlpha = 0.5 + Math.sin(t * 2 + ph) * 0.15;
+    ctx.fillStyle = '#e8e0ff';
+    ctx.beginPath(); ctx.arc(x, y, r, Math.PI, 0);
+    ctx.lineTo(x + r, y + r * 1.3);
+    for (let i = 0; i < 4; i++) {
+      const bx = x + r - (i + 0.5) * r / 2;
+      ctx.lineTo(bx, y + r * (1.0 + 0.35 * Math.sin(t * 6 + i + ph)));
+      ctx.lineTo(x + r - (i + 1) * r / 2, y + r * 1.3);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#1d1033';
+    ctx.fillRect(x - r * 0.45, y - r * 0.3, r * 0.25, r * 0.35); ctx.fillRect(x + r * 0.2, y - r * 0.3, r * 0.25, r * 0.35);
+    ctx.fillRect(x - r * 0.12, y + r * 0.2, r * 0.24, r * 0.3);
+  }
+
+  function drawTomb(x, gy, h, lean) {
+    ctx.save(); ctx.translate(x, gy + 10 * S); ctx.rotate(lean);
+    const w = h * 0.7;
+    ctx.fillStyle = '#4a4458';
+    ctx.beginPath(); ctx.moveTo(-w / 2, 0); ctx.lineTo(-w / 2, -h + w / 2); ctx.arc(0, -h + w / 2, w / 2, Math.PI, 0); ctx.lineTo(w / 2, 0); ctx.fill();
+    ctx.fillStyle = '#6e6680';
+    ctx.beginPath(); ctx.moveTo(-w / 2, 0); ctx.lineTo(-w / 2, -h + w / 2); ctx.arc(0, -h + w / 2, w / 2, Math.PI, Math.PI * 1.6); ctx.lineTo(w * 0.1, 0); ctx.fill();
+    ctx.fillStyle = '#2a2436';
+    ctx.fillRect(-w * 0.3, -h * 0.62, w * 0.6, h * 0.08); ctx.fillRect(-w * 0.3, -h * 0.44, w * 0.6, h * 0.08);
+    ctx.restore();
+  }
+
+  function drawSky(t) {
+    const seaY = H * 0.7, gy = groundY(), xt = xtremeT > 0;
+    bands(0, seaY, xt ? SKY_X : SKY);
+    for (const st of stars) {
+      if (st.y > seaY * 0.6) continue;
+      ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 2 + st.ph);
+      ctx.fillStyle = '#fff4e0';
+      ctx.fillRect(st.x, st.y, P, P);
+      if (st.big) { ctx.fillRect(st.x - P, st.y, P * 3, P); ctx.fillRect(st.x, st.y - P, P, P * 3); }
+    }
+    ctx.globalAlpha = 1;
+
+    // the sun is a giant jack-o'-lantern sinking into the sea
+    const sr = 96 * S, sx = W / 2, sy = seaY - sr * 0.55;
     ctx.save();
     ctx.beginPath(); ctx.rect(0, 0, W, seaY); ctx.clip();
-    const sr = 110 * S;
-    const sg = ctx.createLinearGradient(0, seaY - sr, 0, seaY);
-    sg.addColorStop(0, '#ffe08a'); sg.addColorStop(1, '#ff7b3d');
-    ctx.fillStyle = sg;
-    ctx.beginPath(); ctx.arc(W / 2, seaY, sr, Math.PI, 0); ctx.fill();
-    ctx.fillStyle = x ? '#c2185b' : '#7b2d6b';
-    for (let i = 0; i < 4; i++) ctx.fillRect(W / 2 - sr, seaY - (16 + i * 18) * S, sr * 2, (4 - i * 0.8) * S);
+    [[1.7, 0.08], [1.45, 0.12], [1.25, 0.16]].forEach(([k, a]) => {
+      ctx.globalAlpha = a; ctx.fillStyle = '#ffb347';
+      ctx.beginPath(); ctx.arc(sx, sy, sr * k, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+    drawPumpkin(sx, sy, sr, Math.sin(t * 0.5) * 0.02, t, 2);
+    drawCastle(t, seaY);
     ctx.restore();
 
-    // sea
-    const sea = ctx.createLinearGradient(0, seaY, 0, groundY());
-    sea.addColorStop(0, '#3b2a6b'); sea.addColorStop(1, '#14435c');
-    ctx.fillStyle = sea; ctx.fillRect(0, seaY, W, groundY() - seaY);
-    ctx.strokeStyle = 'rgba(255,196,140,0.35)'; ctx.lineWidth = 2 * S;
+    // bats circling the castle
+    for (let i = 0; i < 7; i++) {
+      const a = t * (0.5 + i * 0.05) + i * 0.9;
+      drawBat(W * 0.76 + Math.cos(a) * (60 + i * 14) * S, seaY - 110 * S + Math.sin(a * 1.7) * 36 * S, (5 + (i % 3)) * S, t * 14 + i);
+    }
+
+    // sea, with the pumpkin's glow shimmering on it
+    bands(seaY, gy, ['#2a1a4a', '#24204f', '#1c2a52', '#163550', '#12404f']);
+    for (let i = 0; i < 8; i++) {
+      const w = sr * 1.7 * (1 - i / 9) * (0.75 + 0.25 * Math.sin(t * 3 + i * 1.7));
+      ctx.fillStyle = i % 2 ? '#ff8c1a' : '#ffb347';
+      ctx.globalAlpha = 0.65 - i * 0.07;
+      ctx.fillRect(Math.round((sx - w / 2) / P) * P, seaY + P + i * 7 * S, w, Math.max(P, 2 * S));
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(255,196,140,0.35)';
     for (let i = 0; i < 6; i++) {
-      const yy = seaY + (i + 1) * (groundY() - seaY) / 7;
-      ctx.beginPath();
-      for (let xx = 0; xx <= W; xx += 12 * S) {
-        const wy = yy + Math.sin(xx * 0.02 / S + t * (1.2 + i * 0.2) + i) * 3 * S;
-        xx === 0 ? ctx.moveTo(xx, wy) : ctx.lineTo(xx, wy);
+      const yy = seaY + (i + 1) * (gy - seaY) / 7;
+      for (let xx = (i * 37) % 60; xx < W; xx += 60 * S) {
+        const off = Math.sin(t * (1.2 + i * 0.2) + xx * 0.01) * 10 * S;
+        ctx.fillRect(xx + off, yy, 18 * S, P);
       }
-      ctx.stroke();
     }
-    // sand
-    const gy = groundY();
-    ctx.fillStyle = '#f2c98a';
-    ctx.beginPath(); ctx.moveTo(0, gy);
-    for (let xx = 0; xx <= W; xx += 20 * S) ctx.lineTo(xx, gy + Math.sin(xx * 0.03 / S) * 3 * S);
-    ctx.lineTo(W, gy); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    for (let xx = 0; xx <= W; xx += 18 * S) {
-      ctx.fillRect(xx, gy - 2 * S + Math.sin(xx * 0.05 / S + t * 2) * 2 * S, 10 * S, 2 * S);
+    // ghosts drifting over the water
+    for (let i = 0; i < 3; i++) {
+      const span = W + 120 * S, x = ((t * (14 + i * 6) * S + i * span / 3) % span) - 60 * S;
+      drawGhost(i % 2 ? W - x : x, seaY - 26 * S - i * 22 * S + Math.sin(t * 1.4 + i * 2) * 10 * S, t, i * 2);
     }
-    // glitter that has settled on the beach
+
+    // sand, darker at night, with a dithered edge
+    bands(gy, H, ['#b07f50', '#9a6c42', '#7f5735']);
+    ctx.fillStyle = '#d9a86a';
+    for (let xx = 0; xx < W; xx += 2 * P) ctx.fillRect(xx, gy, P, P);
+    ctx.fillRect(0, gy - P, W, P);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    for (let xx = 0; xx <= W; xx += 18 * S) ctx.fillRect(xx, gy - 2 * S + Math.sin(xx * 0.05 / S + t * 2) * 2 * S, 10 * S, P);
+    // a little graveyard on the beach
+    [[0.2, 26, -0.08], [0.31, 20, 0.06], [0.66, 24, 0.1], [0.78, 18, -0.05]].forEach(([fx, h, l]) => drawTomb(W * fx, gy, h * S, l));
+    // low fog rolling along the shore
+    ctx.fillStyle = 'rgba(190,170,255,0.13)';
+    for (let i = 0; i < 4; i++) {
+      const fx = ((t * 12 * S + i * W / 3) % (W + 300 * S)) - 150 * S;
+      ctx.beginPath(); ctx.ellipse(fx, gy - 4 * S, 130 * S, 12 * S, 0, 0, Math.PI * 2); ctx.fill();
+    }
     for (const g of glitter) {
       ctx.globalAlpha = Math.min(1, g.life / 2) * (0.5 + 0.5 * Math.sin(t * 6 + g.ph));
-      ctx.fillStyle = g.c; ctx.fillRect(g.x - 1.5 * S, g.y - 1.5 * S, 3 * S, 3 * S);
+      ctx.fillStyle = g.c; ctx.fillRect(g.x, g.y, P, P);
     }
     ctx.globalAlpha = 1;
   }
@@ -614,8 +764,14 @@
     }
   }
 
-  function drawCoconut(x, y, rot, gold, fire, k = 1) {
+  function drawCoconut(x, y, rot, gold, fire, k = 1, pumpkin = false) {
     const r = R() * k;
+    if (pumpkin) {
+      if (fire) { ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 24 * S; }
+      drawPumpkin(x, y, r * 1.05, rot * 0.3, performance.now() / 1000);
+      ctx.shadowBlur = 0;
+      return;
+    }
     ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
     if (fire) { ctx.shadowColor = '#ff6a3d'; ctx.shadowBlur = 24 * S; }
     const g = ctx.createRadialGradient(-r * 0.35, -r * 0.35, r * 0.2, 0, 0, r);
@@ -724,7 +880,7 @@
     ctx.restore();
     if (!big && d.phase === 'aim') {
       const label = d.aim === 'head' ? 'DUCK!' : 'JUMP!';
-      txt(label, d.x + d.dir * 34 * S, d.y - 20 * S, 14 * S, '#ff2a2a', BODY, d.dir === 1 ? 'left' : 'right');
+      labels.push([label, d.x + d.dir * 34 * S, d.y - 20 * S, 15 * S, '#ff2a2a', BODY, d.dir === 1 ? 'left' : 'right']);
       ctx.setLineDash([6 * S, 6 * S]); ctx.strokeStyle = 'rgba(255,42,42,0.6)'; ctx.lineWidth = 2 * S;
       ctx.beginPath(); ctx.moveTo(0, d.ty); ctx.lineTo(W, d.ty); ctx.stroke(); ctx.setLineDash([]);
     }
@@ -806,8 +962,10 @@
     ctx.globalAlpha = 1;
   }
 
+  let labels = [];
   function txt(s, x, y, size, color, font = DISPLAY, align = 'center', outline = true) {
-    ctx.font = `${font === BODY ? '700 ' : ''}${size}px ${font}`;
+    if (font === DISPLAY) size *= 0.72;
+    ctx.font = `${font === BODY ? '700 ' : ''}${Math.round(size)}px ${font}`;
     ctx.textAlign = align; ctx.textBaseline = 'middle';
     if (outline) { ctx.lineWidth = Math.max(3, size * 0.16); ctx.strokeStyle = '#1d1033'; ctx.lineJoin = 'round'; ctx.strokeText(s, x, y); }
     ctx.fillStyle = color; ctx.fillText(s, x, y);
@@ -852,6 +1010,7 @@
     const big = Math.min(54 * S, W / 7.5);
     if (state === 'title') {
       const top = H * 0.24, wob = reduceMotion ? 0 : Math.sin(t * 3) * 4 * S;
+      txt('HALLOWEEN', W / 2, top - big * 0.85, big * 0.62, '#b98cff');
       txt('COCONUT', W / 2, top + wob, big, '#fff4e0');
       txt('XTREME', W / 2, top + big * 1.05 - wob, big * 1.08, '#ff6a3d');
       const lines = [
@@ -861,11 +1020,12 @@
         'Duck or jump when a small drone swoops.',
         'Juggle coconuts to bonk drones down.',
         'Dropped coconuts just feed the crabs.',
+        'Pumpkins score x3 but squash on landing.',
       ];
       const fs = Math.max(13, Math.min(16 * S, W / 28));
       lines.forEach((l, i) => txt(l, W / 2, top + big * 2.2 + i * fs * 1.6, fs, '#ffe3c4', BODY, 'center', false));
       const blink = reduceMotion || Math.sin(t * 5) > -0.3;
-      if (blink) txt('TAP, CLICK OR PRESS SPACE', W / 2, top + big * 2.2 + 7 * fs * 1.6, fs * 1.15, '#ffd84a', BODY);
+      if (blink) txt('TAP, CLICK OR PRESS SPACE', W / 2, top + big * 2.2 + 8 * fs * 1.6, fs * 1.15, '#ffd84a', BODY);
       const help = W < 520 ? ['Drag to move · JUMP and DUCK buttons', 'Keys: A/D move · W jump · S duck · P pause · M mute']
         : ['Move with the mouse, touch, A/D or arrows · W or Up jumps · S or Down ducks · P pauses · M mutes'];
       help.forEach((h, i) => txt(h, W / 2, H - (18 + (help.length - 1 - i) * 16) * Math.max(1, S) - 6, Math.max(11, 11 * S), '#c9a7d6', BODY, 'center', false));
@@ -882,6 +1042,7 @@
   }
 
   function draw(t) {
+    ctx = gctx;
     ctx.save();
     if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * S, (Math.random() - 0.5) * shake * S);
     drawSky(t);
@@ -889,9 +1050,10 @@
     const ps = palms();
     for (const h of hanging) {
       const jig = Math.sin(t * 40) * (h.t < 0.6 ? 3 : 1) * S;
-      drawCoconut(h.x + jig, h.y, 0, h.gold, false, h.k);
+      drawCoconut(h.x + jig, h.y, 0, h.gold, false, h.k, h.pumpkin);
     }
     ps.forEach(p => drawPalm(p, t));
+    ps.forEach(p => drawPumpkin(palmPoint(p, 0).x + p.lean * 28 * S, groundY() + 6 * S, 12 * S, 0, t, 2));
     if (state === 'title') {
       ps.forEach((p, i) => { const c = canopy(p); drawCoconut(c.x - 10 * S + i * 20 * S, c.y + 16 * S, 0, false, false, 0.8 + i * 0.4); });
     }
@@ -908,7 +1070,7 @@
         });
         ctx.globalAlpha = 1;
       }
-      drawCoconut(n.x, n.y, n.rot, n.gold, xtremeT > 0, n.k);
+      drawCoconut(n.x, n.y, n.rot, n.gold, xtremeT > 0, n.k, n.pumpkin);
     }
     drawBoard();
     drawBlasts();
@@ -917,9 +1079,14 @@
       ctx.fillStyle = p.c; ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
     }
     ctx.globalAlpha = 1;
+    ctx.restore();
+    // everything with words goes on the full-resolution layer so it stays readable
+    ctx = uctx;
+    ctx.clearRect(0, 0, W, H);
+    for (const l of labels) txt(...l);
+    labels = [];
     for (const p of pops) { ctx.globalAlpha = Math.min(1, p.life * 2); txt(p.text, p.x, p.y, p.size * S, p.color); }
     ctx.globalAlpha = 1;
-    ctx.restore();
     if (flash > 0) { ctx.fillStyle = `rgba(255,216,74,${flash * 0.35})`; ctx.fillRect(0, 0, W, H); }
     if (hurtFlash > 0) { ctx.fillStyle = `rgba(255,79,163,${hurtFlash * 0.3})`; ctx.fillRect(0, 0, W, H); }
     if (state !== 'title') drawHUD();
@@ -936,7 +1103,7 @@
   }
   player.x = W / 2;
   const go = () => requestAnimationFrame(frame);
-  (document.fonts && document.fonts.load ? Promise.all([document.fonts.load(`20px ${DISPLAY}`), document.fonts.load(`700 16px ${BODY}`)]).catch(() => {}) : Promise.resolve()).then(go, go);
+  (document.fonts && document.fonts.load ? Promise.all([document.fonts.load(`20px ${DISPLAY}`), document.fonts.load(`700 16px ${BODY}`), document.fonts.load(`500 16px ${BODY}`)]).catch(() => {}) : Promise.resolve()).then(go, go);
   cvs.focus();
 })();
 </script>
