@@ -25,7 +25,7 @@
 // On screen, forward is up. SW x SH is the HUD's coordinate space (the canvas is RES times that).
 // The world is drawn zoomed in 2.5x on top of it (5 canvas pixels per world pixel), so the view
 // shows VW x VH world pixels; the camera follows the player forward (camX) and sideways (camY).
-const SW = 240, SH = 288, RES = 2, ZOOM = 2.5, VW = SW / ZOOM, VH = Math.ceil(SH / ZOOM), LAT = 240, HUD = 12, CW = 128, RH = 52;
+const SW = 240, SH = 288, RES = 2, ZOOM = 2.5, VW = SW / ZOOM, VH = Math.ceil(SH / ZOOM), LAT = 400, HUD = 12, CW = 128, RH = 104;
 const cvs = document.getElementById('c');
 const ctx = cvs.getContext('2d');
 const FONT = '"Press Start 2P", monospace';
@@ -234,7 +234,7 @@ const THEMES = [
 ];
 const PW = 230;
 let M = null;
-function roadY(x) { return 120 + 24 * Math.sin(x * 0.0037 + M.s1) + 8 * Math.sin(x * 0.0101 + M.s2); }
+function roadY(x) { return LAT / 2 + 24 * Math.sin(x * 0.0037 + M.s1) + 8 * Math.sin(x * 0.0101 + M.s2); }
 const parcel = x => Math.floor((x + 5000) / PW);
 
 function newMap(n) {
@@ -293,14 +293,14 @@ function genWorld() {
     const o1 = (rng() * 2 - 1) * (RH - 5);
     const kk = k === 'tank' && rng() < 0.5 ? 'tankW' : k;
     const a = place(kk, x, ry + o1, { smoke: (k === 'tank' || k === 'vanwreck') && rng() < 0.4 });
-    if (rng() < 0.45) {
+    if (rng() < 0.3) {
       const side = o1 > 0 ? -1 : 1;
       const k2 = pick(rng, [['trash', 2], ['puddle', 2], ['bikewreck', 1.5], ['barrels', 1]]);
       const o2 = side * (6 + rng() * (RH - 10));
       if (Math.abs(o2 - o1) > a.hh + 18) place(k2, x + rnd(-8, 8), ry + o2);
     }
-    if (rng() < 0.2) place(rng() < 0.5 ? 'tank' : 'bikewreck', x + rnd(-20, 20), ry + (rng() < 0.5 ? -1 : 1) * (RH + 12 + rng() * 16), { smoke: rng() < 0.3 });
-    x += 62 + rng() * 44 - Math.min(12, M.n * 3);
+    if (rng() < 0.12) place(rng() < 0.5 ? 'tank' : 'bikewreck', x + rnd(-20, 20), ry + (rng() < 0.5 ? -1 : 1) * (RH + 12 + rng() * 16), { smoke: rng() < 0.3 });
+    x += 95 + rng() * 60 - Math.min(15, M.n * 4);
   }
   // the open stretch: a few craters and puddles, mostly room for the drones to work
   x = M.gauntEnd + 90;
@@ -309,7 +309,7 @@ function genWorld() {
     const k = pick(rng, [['puddle', 2 * th.puddle], ['crater', 3], ['trash', 1], ['tank', 0.8]]);
     const off = k === 'tank' ? (rng() < 0.5 ? -1 : 1) * (RH + 10) : (rng() * 2 - 1) * (RH - 4);
     place(k, x, ry + off, { smoke: k === 'tank' && rng() < 0.5 });
-    x += 150 + rng() * 160;
+    x += 230 + rng() * 200;
   }
   for (let i = 0; i < 90; i++) {
     const hx = M.gauntEnd + rng() * (M.front - M.gauntEnd);
@@ -374,7 +374,7 @@ function genChunk(ci) {
       let col;
       if (ad < edge) {
         col = PAL.road[(n * 3) | 0];
-        if ((ad > 12.5 && ad < 16) || (ad > 32 && ad < 35.5)) col = n < 0.7 ? PAL.rut : PAL.rutL;
+        const rr = ad / RH; if ((rr > 0.12 && rr < 0.155) || (rr > 0.31 && rr < 0.345) || (rr > 0.6 && rr < 0.635)) col = n < 0.7 ? PAL.rut : PAL.rutL;
         if (ad >= edge - 1) col = PAL.roadEdge;
         if (n > 0.986) col = PAL.pebL; else if (n < 0.012) col = PAL.pebD;
       } else if (ad < edge + 4 + (hash(wx >> 2, 9, s) < 0.5 ? 1 : 0)) {
@@ -516,8 +516,8 @@ function startRun() {
   const x = -60, u = makeUnit(kind, x, roadY(x), crew);
   units.push(u); ctl = u;
   W.left -= crew; W.runs++;
-  // the first drone always shows up 2 to 6 seconds into the run
-  run = { time: 0, droneIdx: 0, zone: false, dTimer: 0, droneAt: rnd(2, 6), endT: 0, lostHere: 0 };
+  // the first drone always shows up 2.6 seconds into the run
+  run = { time: 0, droneIdx: 0, zone: false, dTimer: 0, droneAt: 2.6, endT: 0, lostHere: 0 };
   // other riders on the road: they are in the way, not on your side of the score
   const npcs = 1 + Math.min(3, M.n);
   for (let i = 0; i < npcs; i++) {
@@ -574,11 +574,6 @@ function blast(x, y, R, big) {
     const dx = Math.max(Math.abs(u.x - x) - s.hw, 0), dy = Math.max(Math.abs(u.y - y) - s.hh, 0);
     if (dx * dx + dy * dy < R * R) kill(u, 'blast');
   }
-}
-function crash(u) {
-  if (!u.alive) return;
-  blast(u.x, u.y, 9, u.kind === 'van');
-  kill(u, 'crash');
 }
 
 // ---------------------------------------------------------------- bail out
@@ -673,8 +668,15 @@ function overlapsSolid(u, x, y) {
   forNear(x - s.hw, x + s.hw, o => { if (!hit && o.solid && Math.abs(x - o.x) < s.hw + o.hw && Math.abs(y - o.y) < s.hh + o.hh) hit = o; });
   return hit;
 }
+function bump(u) {
+  if (u.bumpT > 0) return;
+  u.bumpT = 0.3;
+  for (let i = 0; i < 6; i++) part(u.x + SPEC[u.kind].hw, u.y, { vx: rnd(-30, 10), vy: rnd(-30, 30), vz: rnd(15, 40), life: 0.4, col: ['#a88a62', '#6b5640', '#2d2824'][i % 3], grav: 140, drag: 1 });
+  if (u === ctl) { blip(90, 0.12, 'square', 0.08, -40); shake = Math.max(shake, 1.5); }
+}
 function updUnit(u, dt) {
   const s = SPEC[u.kind]; u.t += dt;
+  if (u.bumpT > 0) u.bumpT -= dt;
   if (u.decoy > 0) u.decoy -= dt;
   const vehicle = u.kind !== 'foot', manned = vehicle && (u.crew > 0);
   if (vehicle && !manned) {
@@ -698,8 +700,9 @@ function updUnit(u, dt) {
   if (ny > LAT - 4) { ny = LAT - 4; u.vy = Math.min(0, u.vy); }
   const hit = overlapsSolid(u, nx, ny);
   if (hit) {
-    if (vehicle) { u.x = nx; u.y = ny; crash(u); return; }
-    if (!overlapsSolid(u, u.x, ny)) { nx = u.x; u.vx *= 0.3; }
+    // running into something stops you dead in that direction, it doesn't kill you
+    bump(u);
+    if (!overlapsSolid(u, u.x, ny)) { nx = u.x; u.vx *= vehicle ? 0.2 : 0.3; }
     else if (!overlapsSolid(u, nx, u.y)) { ny = u.y; }
     else { nx = u.x; ny = u.y; }
   }
@@ -726,10 +729,14 @@ function updUnit(u, dt) {
       if (v === u || !v.alive || (!u.npc && !v.npc)) continue;
       const a = SPEC[u.kind], b = SPEC[v.kind];
       if (Math.abs(u.x - v.x) < a.hw + b.hw && Math.abs(u.y - v.y) < a.hh + b.hh) {
-        if (u.kind === 'foot') { kill(u); }
-        else if (v.kind === 'foot') { kill(v); }
-        else { crash(u); crash(v); }
-        return;
+        // bumping into another rider knocks you both aside and slows you down
+        const push = u.y < v.y ? -1 : 1;
+        u.vx *= 0.5; v.vx *= 0.5; u.vy += push * 45; v.vy -= push * 45;
+        u.y += push * 1.5; v.y -= push * 1.5;
+        if (u.kind === 'foot') u.tumble = Math.max(u.tumble, 0.35);
+        if (v.kind === 'foot') v.tumble = Math.max(v.tumble, 0.35);
+        bump(u); bump(v);
+        break;
       }
     }
   }
