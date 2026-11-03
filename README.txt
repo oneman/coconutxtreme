@@ -3,3 +3,4 @@ https://github.com/oneman/coconutxtreme
 https://x.com/rawdod
 
 Frontline Rush: open flr.html in a browser
+Frontline Rush 3D: open flr3d.html in a browser (software-rendered 3D, C switches 1st/3rd person)
