@@ -484,7 +484,7 @@ let state = 'title', paused = false;
 let W = null, run = null, units = [], drones = [], parts = [], ctl = null, nextUp = null;
 let camX = -180, camY = 60, shake = 0, msg = null, cardT = 0, overT = 0, clock = 0, nextId = 1;
 let best = 0;
-try { best = +localStorage.getItem('flr-best') || 0; } catch (e) { }
+try { best = +localStorage.getItem('flr-best-time') || 0; } catch (e) { }
 
 function say(text, col = '#ffffff', dur = 1.6) { msg = { text, col, t: dur, dur }; }
 function makeUnit(kind, x, y, crew) {
@@ -496,7 +496,8 @@ const aliveSoldiers = () => units.filter(u => u.alive && soldiersIn(u) > 0);
 function startWave(n) {
   newMap(n);
   const total = 8 + Math.floor(Math.random() * 6);
-  W = { n, total, left: total, made: 0, lost: 0, best: 0, dist: 0, runs: 0 };
+  // score: every soldier's survival time in seconds, added up (and averaged) over the wave
+  W = { n, total, left: total, made: 0, lost: 0, best: 0, dist: 0, runs: 0, time: 0 };
   prepCard();
 }
 function prepCard() {
@@ -529,8 +530,9 @@ function startRun() {
 }
 function endWave() {
   state = 'over'; overT = 0;
-  W.score = W.made * 1000 + Math.floor(W.dist / 10);
-  if (W.score > best) { best = W.score; W.newBest = true; try { localStorage.setItem('flr-best', best); } catch (e) { } }
+  W.score = Math.round(W.time * 10) / 10;
+  W.avg = W.time / W.total;
+  if (W.score > best) { best = W.score; W.newBest = true; try { localStorage.setItem('flr-best-time', best); } catch (e) { } }
 }
 
 // ---------------------------------------------------------------- particles
@@ -553,7 +555,7 @@ function kill(u, cause) {
   if (!u.alive) return;
   u.alive = false;
   const n = soldiersIn(u);
-  if (n > 0) { W.lost += n; run.lostHere += n; }
+  if (n > 0) { W.lost += n; run.lostHere += n; W.time += n * run.time; }
   if (u.kind !== 'foot') {
     const k = u.kind === 'van' ? 'vanwreck' : 'bikewreck';
     place(k, u.x, u.y, { smoke: true });
@@ -739,7 +741,7 @@ function updUnit(u, dt) {
   if (!u.npc) u.maxX = Math.max(u.maxX, u.x);
   // made it
   if (!u.npc && u.x > M.front + 6 && soldiersIn(u) > 0) {
-    const n = soldiersIn(u); u.alive = false; u.safe = true; W.made += n;
+    const n = soldiersIn(u); u.alive = false; u.safe = true; W.made += n; W.time += n * run.time;
     say(n > 1 ? n + ' MADE IT!' : 'MADE IT!', '#7ef08a', 1.8);
     for (let i = 0; i < 20; i++) part(u.x, u.y, { vx: rnd(-40, 40), vy: rnd(-30, 30), vz: rnd(20, 70), life: 0.8, col: ['#7ef08a', '#f3d34a', '#ffffff'][i % 3], grav: 60, drag: 1 });
     [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.14, 'square', 0.06), i * 90));
@@ -981,18 +983,20 @@ function titleScreen() {
   text('SPACE  BAIL OUT', 28, 166, '#eeeadb');
   text('REACH THE FRONTLINE', 28, 184, '#7ef08a');
   if (((clock * 2.5) | 0) % 2) text('PRESS SPACE', SW / 2, 226, '#ffffff', 'center');
-  if (best) text('BEST ' + best, SW - 4, SH - 12, '#8c9a5a', 'right');
+  if (best) text('BEST ' + best.toFixed(1) + 'S', SW - 4, SH - 12, '#8c9a5a', 'right');
 }
 function overScreen() {
-  panel(16, 66, 208, 136);
-  text('WAVE OVER', SW / 2, 76, '#f3d34a', 'center');
-  text(M.theme.name, SW / 2, 90, '#a9b86a', 'center');
-  text('MADE IT', 30, 110, '#eeeadb'); text(W.made + '/' + W.total, 210, 110, '#7ef08a', 'right');
+  panel(16, 56, 208, 160);
+  text('WAVE OVER', SW / 2, 66, '#f3d34a', 'center');
+  text(M.theme.name, SW / 2, 80, '#a9b86a', 'center');
+  text('SOLDIERS', 30, 98, '#eeeadb'); text(String(W.total), 210, 98, '#eeeadb', 'right');
+  text('MADE IT', 30, 110, '#eeeadb'); text(String(W.made), 210, 110, '#7ef08a', 'right');
   text('LOST', 30, 122, '#eeeadb'); text(String(W.lost), 210, 122, '#ff6a4a', 'right');
-  text('BEST RUN', 30, 134, '#eeeadb'); text(W.best.toFixed(1) + 'S', 210, 134, '#eeeadb', 'right');
-  text('SCORE', 30, 150, '#eeeadb'); text(String(W.score), 210, 150, '#f3d34a', 'right');
-  if (W.newBest) text('NEW BEST!', SW / 2, 166, '#7ef08a', 'center');
-  if (overT > 0.8 && ((clock * 2.5) | 0) % 2) text('SPACE  NEXT MAP', SW / 2, 184, '#ffffff', 'center');
+  text('SURVIVAL TIME', SW / 2, 140, '#a9aeb4', 'center');
+  text('TOTAL', 30, 154, '#f3d34a'); text(W.score.toFixed(1) + 'S', 210, 154, '#f3d34a', 'right');
+  text('AVERAGE', 30, 166, '#f3d34a'); text(W.avg.toFixed(1) + 'S', 210, 166, '#f3d34a', 'right');
+  if (W.newBest) text('NEW BEST TOTAL!', SW / 2, 182, '#7ef08a', 'center');
+  if (overT > 0.8 && ((clock * 2.5) | 0) % 2) text('SPACE  NEXT MAP', SW / 2, 200, '#ffffff', 'center');
 }
 
 // ---------------------------------------------------------------- input
