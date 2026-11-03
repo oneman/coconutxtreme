@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CoconutXtreme: Frontline Rush</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap">
+<style>
+  html, body { margin: 0; height: 100%; background: #0d0f12; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }
+  /* the game renders at 320x180 and is scaled up with hard pixel edges */
+  canvas { display: block; outline: none; image-rendering: pixelated; image-rendering: crisp-edges; }
+</style>
+</head>
+<body>
+<canvas id="c" width="320" height="180" tabindex="0" aria-label="CoconutXtreme: Frontline Rush. Steer with W A S D or the arrow keys, press Space to bail out of a vehicle. Race east to the frontline and dodge the drones."></canvas>
+<script>
+(() => {
+'use strict';
+
+// ---------------------------------------------------------------- setup
+const VW = 320, VH = 180, HUD = 12, CW = 128, RH = 17;
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+const FONT = '"Press Start 2P", monospace';
+
+function fit() {
+  const s = Math.min(innerWidth / VW, innerHeight / VH);
+  const k = s >= 3 ? Math.floor(s) : s;
+  cvs.style.width = Math.floor(VW * k) + 'px';
+  cvs.style.height = Math.floor(VH * k) + 'px';
+}
+addEventListener('resize', fit); fit();
+
+function mulberry(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function hash(x, y, s) {
+  let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(s | 0, 1442695041)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const rnd = (a, b) => a + Math.random() * (b - a);
+
+// ---------------------------------------------------------------- pixel art (all drawn in code)
+const K = {
+  o: '#16181d', ol: '#5f6d30', old: '#414b20', oll: '#83923f', hel: '#505b28', sk: '#d39b62',
+  ru: '#8f4c27', rud: '#5e301a', rul: '#bb6c3b', gm: '#6f747b', gd: '#45494f', gl: '#aab0b6',
+  ch: '#2d2824', chd: '#1d1a17', chm: '#3d3630', wh: '#eeeadb', boot: '#2a2a20'
+};
+function spr(w, h, draw) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  draw((x, y, ww, hh, col) => { g.fillStyle = col; g.fillRect(x, y, ww, hh); }, g);
+  return c;
+}
+function bikeSpr(n) {
+  return spr(20, 11, p => {
+    p(0, 4, 5, 3, K.o); p(1, 5, 3, 1, K.gd);
+    p(15, 4, 5, 3, K.o); p(16, 5, 3, 1, K.gd);
+    p(4, 4, 11, 3, K.rud); p(7, 4, 5, 3, K.ru); p(8, 4, 2, 1, K.rul);
+    p(3, 4, 4, 3, K.o); p(14, 4, 1, 3, K.gm);
+    p(13, 1, 1, 9, K.o); p(13, 0, 1, 2, K.gd); p(13, 9, 1, 2, K.gd);
+    if (n >= 2) { p(2, 2, 4, 7, K.old); p(3, 2, 2, 7, K.ol); p(2, 4, 4, 3, K.hel); p(3, 3, 2, 5, K.hel); p(3, 4, 1, 1, K.oll); }
+    if (n >= 1) {
+      p(6, 2, 5, 7, K.old); p(7, 2, 3, 7, K.ol); p(10, 2, 3, 2, K.ol); p(10, 7, 3, 2, K.ol);
+      p(12, 2, 1, 2, K.sk); p(12, 7, 1, 2, K.sk);
+      p(6, 4, 5, 3, K.hel); p(7, 3, 3, 5, K.hel); p(8, 4, 1, 1, K.oll); p(7, 2, 1, 1, K.wh);
+    }
+  });
+}
+function vanSpr() {
+  return spr(36, 20, p => {
+    p(5, 0, 6, 2, K.o); p(25, 0, 6, 2, K.o); p(5, 18, 6, 2, K.o); p(25, 18, 6, 2, K.o);
+    p(1, 1, 34, 18, K.o);
+    p(2, 2, 32, 16, '#7b8848'); p(2, 15, 32, 3, '#5d6935'); p(2, 2, 32, 1, '#98a65d');
+    p(4, 7, 4, 3, '#4b5527'); p(16, 12, 5, 2, '#4b5527'); p(11, 3, 3, 2, '#4b5527'); p(19, 5, 3, 3, '#4b5527');
+    p(6, 5, 16, 1, '#34391e'); p(6, 13, 16, 1, '#34391e'); p(8, 5, 1, 9, '#34391e'); p(14, 5, 1, 9, '#34391e'); p(20, 5, 1, 9, '#34391e');
+    p(23, 3, 5, 14, '#1f2b35'); p(24, 4, 1, 5, '#6d8da3'); p(25, 4, 1, 2, '#6d8da3');
+    p(28, 3, 6, 14, '#6c793f'); p(30, 4, 1, 12, '#5d6935');
+    p(34, 3, 1, 2, '#f3e7a0'); p(34, 15, 1, 2, '#f3e7a0');
+    p(24, 0, 2, 1, K.o); p(24, 19, 2, 1, K.o);
+    p(10, 8, 2, 1, K.wh); p(12, 9, 2, 2, K.wh); p(10, 11, 2, 1, K.wh);
+    p(1, 4, 1, 12, '#3b4220');
+  });
+}
+function footSpr(f) {
+  return spr(10, 9, p => {
+    if (f === 0) { p(6, 1, 2, 2, K.boot); p(0, 5, 3, 2, K.boot); }
+    else { p(0, 1, 3, 2, K.boot); p(6, 5, 2, 2, K.boot); }
+    p(2, 1, 5, 7, K.o); p(3, 1, 3, 7, K.old); p(3, 2, 3, 5, K.ol);
+    p(6, 6, 4, 1, K.o);
+    p(2, 3, 5, 3, K.hel); p(3, 2, 3, 5, K.hel); p(4, 3, 1, 1, K.oll); p(3, 1, 1, 1, K.wh);
+  });
+}
+function tankSpr() {
+  return spr(32, 22, p => {
+    p(2, 4, 28, 3, K.chd);
+    p(1, 6, 30, 8, K.ch); p(1, 6, 30, 1, K.chm);
+    p(28, 7, 3, 7, K.chm);
+    p(0, 14, 32, 6, K.chd);
+    for (let i = 0; i < 6; i++) { p(2 + i * 5, 15, 3, 4, K.ch); p(3 + i * 5, 16, 1, 2, K.ru); }
+    p(0, 13, 32, 1, K.chm);
+    p(4, 8, 5, 3, K.rud); p(20, 10, 4, 3, K.ru); p(24, 7, 3, 2, K.rud); p(10, 12, 3, 1, K.ru);
+    p(9, 3, 13, 9, K.o); p(10, 4, 11, 7, K.chm); p(11, 5, 9, 5, K.ch); p(13, 5, 4, 3, K.chd); p(12, 4, 2, 1, K.gd);
+    p(16, 8, 3, 2, K.rud);
+    p(2, 9, 8, 2, K.o); p(2, 9, 7, 1, K.chm);
+    p(6, 7, 1, 1, '#4a4038'); p(26, 11, 1, 1, '#4a4038');
+  });
+}
+function flipX(src) { return spr(src.width, src.height, (p, g) => { g.translate(src.width, 0); g.scale(-1, 1); g.drawImage(src, 0, 0); }); }
+function charred(src, seed) {
+  return spr(src.width, src.height, (p, g) => {
+    g.drawImage(src, 0, 0);
+    g.globalCompositeOperation = 'source-atop';
+    g.fillStyle = 'rgba(28,22,18,0.74)'; g.fillRect(0, 0, src.width, src.height);
+    for (let i = 0; i < src.width * src.height / 9; i++) {
+      const x = (hash(i, 1, seed) * src.width) | 0, y = (hash(i, 2, seed) * src.height) | 0;
+      g.fillStyle = hash(i, 3, seed) < 0.5 ? K.rud : '#121010'; g.fillRect(x, y, 1, 1);
+    }
+  });
+}
+function trashSpr() {
+  return spr(14, 9, p => {
+    p(1, 3, 5, 5, '#7e8574'); p(2, 3, 3, 1, '#9aa190');
+    p(5, 1, 5, 5, '#6b5640'); p(5, 1, 5, 1, '#8a7152'); p(7, 1, 1, 5, '#4f3f2e');
+    p(9, 4, 5, 4, K.o); p(10, 5, 3, 2, K.gd); p(11, 5, 1, 2, K.o);
+    p(3, 7, 2, 1, '#c9c2a4'); p(12, 2, 1, 1, '#c94a3a'); p(0, 6, 1, 1, '#d8d0b0');
+  });
+}
+function barrelSpr() {
+  return spr(12, 11, p => {
+    p(1, 2, 5, 8, K.ru); p(1, 2, 5, 2, K.rul); p(2, 3, 3, 1, K.rud); p(1, 6, 5, 1, K.rud);
+    p(6, 1, 5, 8, '#3e5a3a'); p(6, 1, 5, 2, '#5d7d55'); p(7, 2, 3, 1, '#2d4229'); p(6, 5, 5, 1, '#2d4229');
+  });
+}
+function blobSpr(w, h, seed, fn) {
+  return spr(w, h, p => {
+    const cx = (w - 1) / 2, cy = (h - 1) / 2, rx = w / 2 - 1, ry = h / 2 - 1;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const e = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 + (hash(x, y, seed) - 0.5) * 0.3;
+      const c = fn(e, x - cx, y - cy);
+      if (c) p(x, y, 1, 1, c);
+    }
+  });
+}
+const puddleSpr = (w, h, s) => blobSpr(w, h, s, (e, dx, dy) =>
+  e < 0.72 ? ((dy < -1 && dy > -3 && Math.abs(dx) < w / 4 && hash(dx, dy, s) < 0.6) ? '#9cc6dc' : '#43708c')
+  : e < 0.95 ? '#2e4b5f' : e < 1.15 ? '#5c4630' : null);
+const craterSpr = (w, h, s) => blobSpr(w, h, s, (e) =>
+  e < 0.45 ? '#3a5a6a' : e < 0.8 ? '#45321f' : e < 1.05 ? '#8f7050' : e < 1.2 ? '#6e5236' : null);
+function treeSpr(s, seed) {
+  const w = s + 2, h = s + 6;
+  return spr(w, h, p => {
+    p((w >> 1) - 1, s - 2, 2, 7, '#4a3320');
+    const cx = w / 2 - 0.5, cy = s / 2, r = s / 2;
+    for (let y = 0; y < s + 1; y++) for (let x = 0; x < w; x++) {
+      const dx = x - cx, dy = y - cy, e = (dx * dx + dy * dy) / (r * r) + (hash(x, y, seed) - 0.5) * 0.35;
+      if (e > 1) continue;
+      let c = '#44692a';
+      if (e > 0.82) c = '#1f3315';
+      else if (dx + dy < -r * 0.45) c = '#6f9a3c';
+      else if (dx + dy > r * 0.45) c = '#2e4a1f';
+      else if (hash(x >> 1, y >> 1, seed + 7) < 0.25) c = '#56803a';
+      p(x, y, 1, 1, c);
+    }
+  });
+}
+function poleSpr() {
+  return spr(9, 19, p => {
+    p(4, 1, 1, 18, '#5a3d22'); p(4, 1, 1, 18, '#5a3d22'); p(3, 17, 3, 2, '#3b2816');
+    p(1, 3, 7, 1, '#4a321c'); p(1, 2, 1, 1, '#d5dccf'); p(7, 2, 1, 1, '#d5dccf'); p(4, 0, 1, 1, '#d5dccf');
+  });
+}
+function droneSpr(f) {
+  return spr(11, 11, p => {
+    for (let i = 1; i < 10; i++) { p(i, i, 1, 1, K.o); p(10 - i, i, 1, 1, K.o); }
+    p(4, 4, 3, 3, '#3a3e44'); p(4, 4, 3, 1, '#5e636a'); p(4, 7, 3, 2, '#6b5a3a'); p(5, 9, 1, 1, '#c9a54a');
+    const r = 'rgba(205,210,215,0.75)';
+    for (const [x, y] of [[0, 0], [8, 0], [0, 8], [8, 8]]) {
+      if (f === 0) { p(x, y + 1, 3, 1, r); p(x + 1, y, 1, 3, r); }
+      else { p(x, y, 1, 1, r); p(x + 2, y + 2, 1, 1, r); p(x + 2, y, 1, 1, r); p(x, y + 2, 1, 1, r); }
+    }
+  });
+}
+function coconutSpr() {
+  return spr(9, 9, p => {
+    p(2, 0, 5, 9, '#6b3f1f'); p(0, 2, 9, 5, '#6b3f1f'); p(1, 1, 7, 7, '#6b3f1f');
+    p(2, 1, 3, 1, '#9a6234'); p(1, 2, 1, 2, '#9a6234');
+    p(3, 3, 1, 1, '#2a160a'); p(5, 3, 1, 1, '#2a160a'); p(4, 5, 1, 1, '#2a160a');
+  });
+}
+function flagSpr() {
+  const coco = coconutSpr();
+  return spr(22, 28, (p, g) => {
+    p(1, 0, 2, 28, '#5a3d22'); p(1, 0, 1, 28, '#7a5732');
+    p(3, 1, 18, 12, '#2f7a3a'); p(3, 1, 18, 1, '#4ea25a'); p(3, 12, 18, 1, '#225a2a');
+    g.drawImage(coco, 8, 3);
+  });
+}
+const sandbagSpr = spr(8, 5, p => { p(0, 1, 8, 4, '#a08d5e'); p(0, 1, 8, 1, '#bba873'); p(3, 1, 1, 4, '#7e6d45'); p(0, 4, 8, 1, '#7e6d45'); });
+
+const SPR = {
+  bike: [bikeSpr(0), bikeSpr(1), bikeSpr(2)],
+  van: vanSpr(),
+  foot: [footSpr(0), footSpr(1)],
+  tank: tankSpr(), drone: [droneSpr(0), droneSpr(1)],
+  trash: trashSpr(), barrels: barrelSpr(), pole: poleSpr(), coconut: coconutSpr(), flag: flagSpr(),
+  puddles: [puddleSpr(24, 10, 3), puddleSpr(18, 8, 5), puddleSpr(30, 12, 9)],
+  craters: [craterSpr(22, 12, 11), craterSpr(18, 10, 13)],
+  trees: [treeSpr(12, 21), treeSpr(14, 23), treeSpr(17, 25), treeSpr(13, 27)],
+};
+SPR.tankW = flipX(SPR.tank);
+SPR.bikeWreck = charred(bikeSpr(0), 31);
+SPR.vanWreck = charred(SPR.van, 37);
+const shadowCache = new Map();
+function shadow(w, h) {
+  const key = w + 'x' + h;
+  if (!shadowCache.has(key)) shadowCache.set(key, blobSpr(w, h, 1, e => e < 0.9 ? 'rgba(12,16,8,0.32)' : null));
+  return shadowCache.get(key);
+}
+
+// ---------------------------------------------------------------- map
+const THEMES = [
+  { name: 'WHEAT BELT', fields: ['wheat', 'wheat', 'wheat', 'plow', 'grass'], belts: 0.45, ew: 0.25, poles2: false, puddle: 1 },
+  { name: 'TREE LINE ROAD', fields: ['grass', 'wheat', 'plow', 'grass'], belts: 0.85, ew: 0.6, poles2: false, puddle: 1 },
+  { name: 'POWER LINE FLATS', fields: ['plow', 'wheat', 'mud', 'plow'], belts: 0.25, ew: 0.15, poles2: true, puddle: 1.8 },
+];
+const PW = 230;
+let M = null;
+function roadY(x) { return 100 + 26 * Math.sin(x * 0.0041 + M.s1) + 9 * Math.sin(x * 0.0113 + M.s2); }
+const parcel = x => Math.floor((x + 5000) / PW);
+
+function newMap(n) {
+  const theme = THEMES[(n - 1) % THEMES.length];
+  const seed = (Math.random() * 1e9) | 0, rng = mulberry(seed);
+  M = { n, theme, seed, rng, s1: rng() * 6.28, s2: rng() * 6.28, chunks: new Map(), decals: [], obs: [], poles: [[], []], front: 3400, gauntEnd: 760 };
+  genWorld();
+}
+
+function lowerBound(arr, x) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m].x < x) lo = m + 1; else hi = m; } return lo; }
+function addObs(o) { M.obs.splice(lowerBound(M.obs, o.x), 0, o); return o; }
+function forNear(x0, x1, fn) { const a = M.obs; for (let i = lowerBound(a, x0 - 20); i < a.length && a[i].x <= x1 + 20; i++) fn(a[i]); }
+
+const OBJ = {
+  tank: { hw: 13, hh: 6, solid: true, ax: 16, ay: 12, sh: [32, 12] },
+  tankW: { hw: 13, hh: 6, solid: true, ax: 16, ay: 12, sh: [32, 12] },
+  bikewreck: { hw: 7, hh: 3, solid: true, ax: 10, ay: 5, sh: [20, 7] },
+  vanwreck: { hw: 15, hh: 7, solid: true, ax: 18, ay: 10, sh: [36, 16] },
+  trash: { hw: 5, hh: 3, fx: 'trash', ax: 7, ay: 5, sh: [14, 5] },
+  barrels: { hw: 5, hh: 2, solid: true, ax: 6, ay: 8, sh: [12, 5] },
+  pole: { hw: 1, hh: 1, solid: true, ax: 4, ay: 18 },
+  tree: { hw: 2, hh: 2, solid: true },
+  puddle: { fx: 'puddle', flat: true },
+  crater: { fx: 'puddle', flat: true },
+  sandbag: { deco: true, ax: 4, ay: 3 },
+  flag: { deco: true, ax: 2, ay: 27 },
+};
+function place(kind, x, y, extra) {
+  const d = OBJ[kind], o = Object.assign({ kind, x, y, hw: d.hw || 0, hh: d.hh || 0, solid: !!d.solid, fx: d.fx || null, flat: !!d.flat, deco: !!d.deco, ax: d.ax, ay: d.ay, sh: d.sh }, extra);
+  if (kind === 'puddle' || kind === 'crater') {
+    const list = kind === 'puddle' ? SPR.puddles : SPR.craters;
+    o.img = list[(M.rng() * list.length) | 0];
+    o.hw = o.img.width / 2 - 3; o.hh = o.img.height / 2 - 2; o.ax = o.img.width / 2; o.ay = o.img.height / 2;
+  } else if (kind === 'tree') {
+    o.img = SPR.trees[(M.rng() * SPR.trees.length) | 0];
+    o.ax = o.img.width / 2; o.ay = o.img.height - 2; o.sh = [o.img.width + 2, 6];
+  } else o.img = { tank: SPR.tank, tankW: SPR.tankW, bikewreck: SPR.bikeWreck, vanwreck: SPR.vanWreck, trash: SPR.trash, barrels: SPR.barrels, pole: SPR.pole, sandbag: sandbagSpr, flag: SPR.flag }[kind];
+  return addObs(o);
+}
+function pick(rng, list) { let t = 0; for (const [, w] of list) t += w; let r = rng() * t; for (const [k, w] of list) { if ((r -= w) <= 0) return k; } return list[0][0]; }
+
+function genWorld() {
+  const rng = M.rng, th = M.theme;
+  // the gauntlet: the first few seconds on the road are packed with junk
+  let x = 150;
+  while (x < M.gauntEnd) {
+    const ry = roadY(x);
+    const k = pick(rng, [['tank', 3], ['bikewreck', 2.2], ['trash', 2], ['puddle', 2 * th.puddle], ['barrels', 1], ['vanwreck', 0.7]]);
+    const o1 = (rng() * 2 - 1) * (RH - 5);
+    const kk = k === 'tank' && rng() < 0.5 ? 'tankW' : k;
+    const a = place(kk, x, ry + o1, { smoke: (k === 'tank' || k === 'vanwreck') && rng() < 0.4 });
+    if (rng() < 0.3) {
+      const side = o1 > 0 ? -1 : 1;
+      const k2 = pick(rng, [['trash', 2], ['puddle', 2], ['bikewreck', 1.5], ['barrels', 1]]);
+      const o2 = side * (RH - 3 - rng() * 4);
+      if (Math.abs(o2 - o1) > a.hh + 18) place(k2, x + rnd(-8, 8), ry + o2);
+    }
+    if (rng() < 0.3) place(rng() < 0.5 ? 'tank' : 'bikewreck', x + rnd(-20, 20), ry + (rng() < 0.5 ? -1 : 1) * (RH + 12 + rng() * 16), { smoke: rng() < 0.3 });
+    x += 36 + rng() * 34 - Math.min(10, M.n * 2);
+  }
+  // the open stretch: a few craters and puddles, mostly room for the drones to work
+  x = M.gauntEnd + 90;
+  while (x < M.front - 90) {
+    const ry = roadY(x);
+    const k = pick(rng, [['puddle', 2 * th.puddle], ['crater', 3], ['trash', 1], ['tank', 0.8]]);
+    const off = k === 'tank' ? (rng() < 0.5 ? -1 : 1) * (RH + 10) : (rng() * 2 - 1) * (RH - 4);
+    place(k, x, ry + off, { smoke: k === 'tank' && rng() < 0.5 });
+    x += 100 + rng() * 140;
+  }
+  for (let i = 0; i < 90; i++) {
+    const hx = M.gauntEnd + rng() * (M.front - M.gauntEnd);
+    M.decals.push({ type: 'hole', x: hx, y: 16 + rng() * 162, r: 2 + rng() * 3 });
+  }
+  // power lines along the road
+  for (let px = -320, i = 0; px < M.front + 420; px += 74, i++) {
+    if (rng() < 0.07) continue;
+    const pn = place('pole', px, roadY(px) - RH - 8);
+    M.poles[0].push(pn);
+    if (th.poles2) { const qx = px + 37; const ps = place('pole', qx, roadY(qx) + RH + 9); M.poles[1].push(ps); }
+  }
+  // tree lines along field borders and parallel to the road
+  for (let pi = parcel(-320); pi <= parcel(M.front + 400); pi++) {
+    const bx = pi * PW - 5000;
+    if (hash(pi, 1, M.seed) < th.belts) {
+      const ry = roadY(bx);
+      for (let y = 18 + rng() * 4; y < ry - RH - 14; y += 6 + rng() * 3) place('tree', bx + rnd(-2, 2), y);
+      for (let y = ry + RH + 16 + rng() * 3; y < VH; y += 6 + rng() * 3) place('tree', bx + rnd(-2, 2), y);
+    }
+    for (const side of [-1, 1]) {
+      if (hash(pi, side + 5, M.seed) >= th.ew) continue;
+      const off = RH + 28 + rng() * 10;
+      for (let tx = bx + 8; tx < bx + PW - 8; tx += 7 + rng() * 3) {
+        const ty = roadY(tx) + side * off;
+        if (ty > 18 && ty < VH - 2 && (tx < M.front - 20 || tx > M.front + 30)) place('tree', tx, ty);
+      }
+    }
+  }
+  // the frontline: a trench, sandbags and our flag
+  M.decals.push({ type: 'trench', x: M.front, y: 90, r: 12 });
+  const fry = roadY(M.front);
+  for (let y = 18; y < VH; y += 5) {
+    if (Math.abs(y - fry) < RH + 2) continue;
+    place('sandbag', M.front + 9 + ((y / 5) % 2) * 2, y);
+  }
+  place('flag', M.front + 14, fry - RH - 6);
+  place('flag', M.front + 14, fry + RH + 10);
+}
+
+// ---------------------------------------------------------------- terrain chunks
+const C = hex => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+const PAL = {
+  road: ['#8a6842', '#80603c', '#927048'].map(C), rut: C('#684e30'), rutL: C('#735737'), roadEdge: C('#70563a'), pebL: C('#b0966e'), pebD: C('#543e28'),
+  verge: ['#5c8034', '#50722e', '#688c3a'].map(C), track: C('#78603c'),
+  wheat: ['#d6b04c', '#c8a040', '#b48a36'].map(C), wheatHi: C('#ecd070'), wheatLo: C('#957030'),
+  plow: [C('#5c4028'), C('#765232'), C('#765232'), C('#684a2e')], sprout: C('#60783a'),
+  grass: ['#60863a', '#567a32', '#6c943e'].map(C), flower: C('#e6dc78'), flowerW: C('#eae6dc'),
+  mud: [C('#5a4630'), C('#503e2a')], mudW: C('#465f6c'),
+};
+function fieldType(pi, side) { const f = M.theme.fields; return f[(hash(pi, side, M.seed) * f.length) | 0]; }
+function genChunk(ci) {
+  const c = document.createElement('canvas'); c.width = CW; c.height = VH;
+  const g = c.getContext('2d'), img = g.createImageData(CW, VH), d = img.data, s = M.seed;
+  for (let lx = 0; lx < CW; lx++) {
+    const wx = ci * CW + lx, ry = roadY(wx);
+    const ejN = hash(wx >> 1, 3, s) < 0.5 ? 0 : 1, ejS = hash(wx >> 1, 5, s) < 0.5 ? 0 : 1;
+    const pi = parcel(wx), border = (wx - (pi * PW - 5000)) < 3;
+    for (let y = 0; y < VH; y++) {
+      const dd = y - ry, ad = Math.abs(dd), n = hash(wx, y, s);
+      const edge = RH + (dd < 0 ? ejN : ejS);
+      let col;
+      if (ad < edge) {
+        col = PAL.road[(n * 3) | 0];
+        if (ad > 4.5 && ad < 7.5) col = n < 0.7 ? PAL.rut : PAL.rutL;
+        if (ad >= edge - 1) col = PAL.roadEdge;
+        if (n > 0.986) col = PAL.pebL; else if (n < 0.012) col = PAL.pebD;
+      } else if (ad < edge + 4 + (hash(wx >> 2, 9, s) < 0.5 ? 1 : 0)) {
+        col = PAL.verge[(n * 3) | 0];
+      } else if (border) {
+        col = PAL.track;
+      } else {
+        const t = fieldType(pi, dd < 0 ? 0 : 1);
+        if (t === 'wheat') {
+          col = PAL.wheat[(y + pi) % 3];
+          if (n > 0.93) col = PAL.wheatHi; else if (n < 0.03) col = PAL.wheatLo;
+          if (hash(wx >> 4, y >> 3, s + 1) < 0.18 && n < 0.5) col = PAL.wheat[2];
+        } else if (t === 'plow') {
+          col = PAL.plow[y % 4]; if (n > 0.95) col = PAL.sprout;
+        } else if (t === 'mud') {
+          col = PAL.mud[(n * 2) | 0]; if (hash(wx >> 2, y >> 1, s) > 0.93) col = PAL.mudW;
+        } else {
+          col = PAL.grass[(n * 3) | 0]; if (n > 0.992) col = PAL.flower; else if (n < 0.006) col = PAL.flowerW;
+        }
+      }
+      const o = (y * CW + lx) * 4; d[o] = col[0]; d[o + 1] = col[1]; d[o + 2] = col[2]; d[o + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const ox = ci * CW;
+  for (const dc of M.decals) if (dc.x + dc.r * 2 + 8 > ox && dc.x - dc.r * 2 - 8 < ox + CW) drawDecal(g, dc, ox);
+  M.chunks.set(ci, c);
+  return c;
+}
+function chunk(ci) { return M.chunks.get(ci) || genChunk(ci); }
+function drawDecal(g, dc, ox) {
+  const px = (x, y, col) => { g.fillStyle = col; g.fillRect(x, y, 1, 1); };
+  if (dc.type === 'scorch') {
+    const r = dc.r, rx = r * 1.5;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -Math.ceil(rx); dx <= rx; dx++) {
+      const e = (dx / rx) ** 2 + (dy / r) ** 2;
+      if (e < 1 && hash(dx + (dc.x | 0), dy + (dc.y | 0), 99) > e * 0.85) px((dc.x | 0) - ox + dx, (dc.y | 0) + dy, e < 0.3 ? '#16110d' : 'rgba(30,24,18,0.75)');
+    }
+  } else if (dc.type === 'hole') {
+    const r = dc.r;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r - 1; dx <= r + 1; dx++) {
+      const e = (dx / (r + 1)) ** 2 + (dy / r) ** 2;
+      if (e < 0.5) px((dc.x | 0) - ox + dx, (dc.y | 0) + dy, 'rgba(40,28,18,0.8)');
+      else if (e < 1) px((dc.x | 0) - ox + dx, (dc.y | 0) + dy, 'rgba(150,120,80,0.55)');
+    }
+  } else if (dc.type === 'trench') {
+    const fry = roadY(dc.x);
+    for (let y = 0; y < VH; y++) {
+      const z = Math.abs(((y / 12) % 2) - 1) * 6 | 0;
+      const x0 = (dc.x | 0) - ox + z;
+      if (Math.abs(y - fry) < RH) { g.fillStyle = (y % 3) ? '#7a5a36' : '#5a4026'; g.fillRect(x0 - 1, y, 7, 1); continue; }
+      g.fillStyle = '#9b7d55'; g.fillRect(x0 - 1, y, 1, 1); g.fillRect(x0 + 5, y, 1, 1);
+      g.fillStyle = '#3a2a1c'; g.fillRect(x0, y, 5, 1);
+      if (hash(y, 4, 7) < 0.2) px(x0 + 2, y, '#2a1d12');
+    }
+  }
+}
+function addDecal(dc) {
+  M.decals.push(dc);
+  for (const [ci, c] of M.chunks) { const ox = ci * CW; if (dc.x + dc.r * 2 + 8 > ox && dc.x - dc.r * 2 - 8 < ox + CW) drawDecal(c.getContext('2d'), dc, ox); }
+}
+
+// ---------------------------------------------------------------- audio
+let AC = null, master, engOsc, engGain, whOsc, whGain, noiseBuf, muted = false;
+function audioInit() {
+  if (AC) { if (AC.state === 'suspended') AC.resume(); return; }
+  try {
+    AC = new (window.AudioContext || window.webkitAudioContext)();
+    master = AC.createGain(); master.gain.value = muted ? 0 : 0.5; master.connect(AC.destination);
+    engOsc = AC.createOscillator(); engOsc.type = 'sawtooth';
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520;
+    engGain = AC.createGain(); engGain.gain.value = 0;
+    engOsc.connect(lp); lp.connect(engGain); engGain.connect(master); engOsc.start();
+    whOsc = AC.createOscillator(); whOsc.type = 'square';
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 2;
+    whGain = AC.createGain(); whGain.gain.value = 0;
+    whOsc.connect(bp); bp.connect(whGain); whGain.connect(master); whOsc.start();
+    noiseBuf = AC.createBuffer(1, AC.sampleRate, AC.sampleRate);
+    const ch = noiseBuf.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+  } catch (e) { AC = null; }
+}
+function blip(f, dur, type = 'square', vol = 0.08, slide = 0) {
+  if (!AC) return;
+  const t = AC.currentTime, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.02);
+}
+function boom(vol = 0.5, dur = 0.8, freq = 900) {
+  if (!AC) return;
+  const t = AC.currentTime, s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.setValueAtTime(freq, t); f.frequency.exponentialRampToValueAtTime(60, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur);
+  blip(70, dur * 0.7, 'sine', vol * 0.6, -40);
+}
+function setMuted(m) { muted = m; if (master) master.gain.value = m ? 0 : 0.5; }
+
+// ---------------------------------------------------------------- game state
+const SPEC = {
+  bike: { cruise: 125, boost: 158, brake: 62, lat: 94, ak: 2.4, lk: 7, hw: 7, hh: 3, off: 0.8, name: 'DIRT BIKE' },
+  van: { cruise: 104, boost: 128, brake: 50, lat: 70, ak: 1.6, lk: 4.8, hw: 15, hh: 7, off: 0.66, name: 'BOHAKA VAN' },
+  foot: { cruise: 58, boost: 72, brake: -22, lat: 54, ak: 6, lk: 10, hw: 2, hh: 2, off: 0.92, name: 'ON FOOT' },
+};
+let state = 'title', paused = false;
+let W = null, run = null, units = [], drones = [], parts = [], ctl = null, nextUp = null;
+let camX = -180, shake = 0, msg = null, cardT = 0, overT = 0, clock = 0, nextId = 1;
+let best = 0;
+try { best = +localStorage.getItem('flr-best') || 0; } catch (e) { }
+
+function say(text, col = '#ffffff', dur = 1.6) { msg = { text, col, t: dur, dur }; }
+function makeUnit(kind, x, y, crew) {
+  return { isUnit: true, kind, x, y, vx: SPEC[kind].cruise * 0.9, vy: 0, crew, alive: true, skid: 0, slow: 0, tumble: 0, decoy: 0, t: 0, ang: 0, id: nextId++, lastFx: null, dodge: Math.random() < 0.5, npc: false, maxX: x };
+}
+const soldiersIn = u => u.npc ? 0 : u.kind === 'foot' ? 1 : u.crew;
+const aliveSoldiers = () => units.filter(u => u.alive && soldiersIn(u) > 0);
+
+function startWave(n) {
+  newMap(n);
+  const total = 8 + Math.floor(Math.random() * 6);
+  W = { n, total, left: total, made: 0, lost: 0, best: 0, dist: 0, runs: 0 };
+  prepCard();
+}
+function prepCard() {
+  units = []; drones = []; ctl = null;
+  const r = Math.random();
+  let kind, crew;
+  if (r < 0.42) { kind = 'bike'; crew = Math.random() < 0.4 ? 2 : 1; }
+  else if (r < 0.86) { kind = 'van'; crew = 2 + Math.floor(Math.random() * 3); }
+  else { kind = 'foot'; crew = 1; }
+  crew = Math.min(crew, W.left);
+  nextUp = { kind, crew };
+  state = 'card'; cardT = 1.6; camX = -200;
+}
+function startRun() {
+  const { kind, crew } = nextUp;
+  const x = -60, u = makeUnit(kind, x, roadY(x), crew);
+  units.push(u); ctl = u;
+  W.left -= crew; W.runs++;
+  run = { time: 0, droneIdx: 0, zone: false, dTimer: 1.2, endT: 0, lostHere: 0 };
+  // other riders on the road: they are in the way, not on your side of the score
+  const npcs = 2 + Math.min(4, M.n);
+  for (let i = 0; i < npcs; i++) {
+    const nx = 140 + Math.random() * (M.gauntEnd - 200), b = makeUnit('bike', nx, roadY(nx) + rnd(-RH + 5, RH - 5), 1);
+    b.npc = true; b.vx = rnd(62, 88); b.cruise = b.vx; units.push(b);
+  }
+  camX = x - 110; state = 'play';
+  say('GO GO GO!', '#f3d34a', 1.2);
+  blip(440, 0.1); setTimeout(() => blip(660, 0.15), 110);
+}
+function endWave() {
+  state = 'over'; overT = 0;
+  W.score = W.made * 1000 + Math.floor(W.dist / 10);
+  if (W.score > best) { best = W.score; W.newBest = true; try { localStorage.setItem('flr-best', best); } catch (e) { } }
+}
+
+// ---------------------------------------------------------------- particles
+function part(x, y, o) { parts.push(Object.assign({ x, y, z: 0, vx: 0, vy: 0, vz: 0, life: 0.6, max: 0.6, size: 1, col: '#fff', drag: 2, grav: 0 }, o, { max: o.life || 0.6 })); }
+function explosion(x, y, big) {
+  const n = big ? 46 : 26;
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * 6.283, s = rnd(10, big ? 95 : 70);
+    part(x, y, { vx: Math.cos(a) * s, vy: Math.sin(a) * s * 0.6, vz: rnd(10, 60), life: rnd(0.25, 0.7), size: (Math.random() * 3 + 1) | 0, col: ['#fff6c2', '#ffd34a', '#ff8a2a', '#d9441c'][(Math.random() * 4) | 0], drag: 3, grav: -40 });
+  }
+  for (let i = 0; i < (big ? 12 : 7); i++) part(x + rnd(-6, 6), y + rnd(-4, 4), { vx: rnd(-10, 10), vz: rnd(12, 30), life: rnd(0.9, 1.8), size: (rnd(3, 6)) | 0, col: ['#4a4744', '#5e5a55', '#36332f'][(Math.random() * 3) | 0], drag: 1, smoke: true });
+  for (let i = 0; i < 8; i++) part(x, y, { vx: rnd(-60, 60), vy: rnd(-40, 40), vz: rnd(40, 90), life: rnd(0.5, 0.9), size: 1, col: '#1a1714', drag: 1, grav: 160 });
+  part(x, y, { life: 0.14, flash: big ? 16 : 11, col: '#fff8d8' });
+  shake = Math.max(shake, big ? 5 : 3.5);
+  boom(big ? 0.55 : 0.4, big ? 0.9 : 0.6);
+}
+
+// ---------------------------------------------------------------- kills and damage
+function kill(u, cause) {
+  if (!u.alive) return;
+  u.alive = false;
+  const n = soldiersIn(u);
+  if (n > 0) { W.lost += n; run.lostHere += n; }
+  if (u.kind !== 'foot') {
+    const k = u.kind === 'van' ? 'vanwreck' : 'bikewreck';
+    place(k, u.x, u.y, { smoke: true });
+    addDecal({ type: 'scorch', x: u.x, y: u.y, r: u.kind === 'van' ? 10 : 7 });
+  } else addDecal({ type: 'scorch', x: u.x, y: u.y, r: 4 });
+  if (n > 0) {
+    const what = u.kind === 'foot' ? 'SOLDIER DOWN' : (u.kind === 'van' ? 'VAN HIT' : 'BIKE HIT') + (n > 1 ? ' - ' + n + ' LOST' : '');
+    say(what, '#ff6a4a', 1.4);
+  }
+}
+function blast(x, y, R, big) {
+  explosion(x, y, big);
+  for (const u of units) {
+    if (!u.alive) continue;
+    const s = SPEC[u.kind];
+    const dx = Math.max(Math.abs(u.x - x) - s.hw, 0), dy = Math.max(Math.abs(u.y - y) - s.hh, 0);
+    if (dx * dx + dy * dy < R * R) kill(u, 'blast');
+  }
+}
+function crash(u) {
+  if (!u.alive) return;
+  blast(u.x, u.y, 9, u.kind === 'van');
+  kill(u, 'crash');
+}
+
+// ---------------------------------------------------------------- bail out
+function bail() {
+  const u = ctl;
+  if (!u || !u.alive || u.kind === 'foot' || u.crew <= 0 || state !== 'play') return;
+  const out = [];
+  for (let i = 0; i < u.crew; i++) {
+    const side = i % 2 === 0 ? -1 : 1, off = (u.kind === 'van' ? 9 : 5) + (i >> 1) * 4;
+    const f = makeUnit('foot', u.x - 3 - i * 3, clamp(u.y + side * off, HUD + 5, VH - 3), 1);
+    f.vx = u.vx * 0.55; f.vy = side * rnd(55, 80) + u.vy * 0.3; f.tumble = 0.5;
+    units.push(f); out.push(f);
+  }
+  u.crew = 0; u.decoy = 1.8;
+  ctl = out[0];
+  for (const d of drones) if (d.state === 'hunt' && d.target === u && Math.random() > 0.65) d.target = chooseTarget(d);
+  say(out.length > 1 ? 'BAIL OUT! x' + out.length : 'BAIL OUT!', '#f3d34a', 1);
+  blip(520, 0.18, 'square', 0.07, -300);
+}
+
+// ---------------------------------------------------------------- drones
+function chooseTarget(d) {
+  const c = units.filter(u => u.alive && !u.npc && (soldiersIn(u) > 0 || u.decoy > 0));
+  if (!c.length) return null;
+  let tot = 0; const w = c.map(u => { const k = (u === ctl ? 3 : 1) * (u.decoy > 0 && !soldiersIn(u) ? 1.6 : 1) / (1 + Math.hypot(u.x - d.x, u.y - d.y) / 150); tot += k; return k; });
+  let r = Math.random() * tot;
+  for (let i = 0; i < c.length; i++) if ((r -= w[i]) <= 0) return c[i];
+  return c[0];
+}
+function spawnDrone() {
+  const idx = run.droneIdx++, lvl = M.n - 1;
+  const spd = Math.min(245, 58 + idx * 15 + lvl * 12);
+  const turn = Math.min(6.5, 1.9 + idx * 0.38 + lvl * 0.2);
+  const dive = Math.max(0.3, 0.68 - idx * 0.035 - lvl * 0.04);
+  let x, y; const r = Math.random();
+  if (spd > 165 && r < 0.2) { x = camX - 14; y = rnd(24, 170); }
+  else if (r < 0.45) { x = camX + rnd(170, 320); y = Math.random() < 0.5 ? 0 : VH + 8; }
+  else { x = camX + VW + 14; y = rnd(24, 170); }
+  const d = { x, y, z: 24, spd, turn, dive, state: 'hunt', t: 0, target: null, h: Math.PI };
+  d.target = chooseTarget(d);
+  if (d.target) d.h = Math.atan2(d.target.y - y, d.target.x - x);
+  drones.push(d);
+  if (idx === 0) say('DRONES INBOUND!', '#ff6a4a', 1.6);
+}
+function updDrone(d, dt) {
+  d.t += dt;
+  if (d.state === 'hunt') {
+    if (!d.target || !d.target.alive || (!soldiersIn(d.target) && d.target.decoy <= 0 && Math.random() < dt * 2)) d.target = chooseTarget(d);
+    const t = d.target;
+    if (t) {
+      const dist = Math.hypot(t.x - d.x, t.y - d.y);
+      const lead = clamp(dist / (d.spd + 60), 0, 0.8);
+      const want = Math.atan2(t.y + t.vy * lead * 0.5 - d.y, t.x + t.vx * lead - d.x);
+      let da = want - d.h; while (da > Math.PI) da -= 6.2832; while (da < -Math.PI) da += 6.2832;
+      d.h += clamp(da, -d.turn * dt, d.turn * dt);
+      if (dist < 58 + d.spd * 0.12) {
+        d.state = 'dive'; d.dt = 0; d.sx = d.x; d.sy = d.y; d.z0 = d.z;
+        d.ax = t.x + t.vx * d.dive; d.ay = clamp(t.y + t.vy * d.dive, HUD + 4, VH - 2);
+        blip(1320, 0.07, 'square', 0.05); setTimeout(() => blip(1320, 0.07, 'square', 0.05), 90);
+      }
+    }
+    d.x += Math.cos(d.h) * d.spd * dt; d.y += Math.sin(d.h) * d.spd * dt;
+    d.z = 24 + Math.sin(d.t * 6) * 1.5;
+    if (d.t > 14 || d.x < camX - 120 || d.x > camX + VW + 400) d.dead = true;
+  } else {
+    d.dt += dt;
+    const k = Math.min(1, d.dt / d.dive);
+    d.x = d.sx + (d.ax - d.sx) * k; d.y = d.sy + (d.ay - d.sy) * k; d.z = d.z0 * (1 - k * k);
+    if (k >= 1) { d.dead = true; blast(d.ax, d.ay, 9, false); }
+  }
+}
+
+// ---------------------------------------------------------------- units
+const input = { x: 0, y: 0 };
+function buddyAI(u) {
+  const ry = roadY(u.x + 20), goal = ry + ((u.id % 3) - 1) * 8;
+  let iy = Math.abs(goal - u.y) > 3 ? Math.sign(goal - u.y) * 0.6 : 0;
+  forNear(u.x, u.x + 22, o => { if (o.solid && o.x > u.x && Math.abs(o.y - u.y) < o.hh + 5) iy = u.y < o.y ? -1 : 1; });
+  if (u.dodge) for (const d of drones) if (d.state === 'dive' && Math.hypot(d.ax - u.x, d.ay - u.y) < 16) iy = d.ay > u.y ? -1 : 1;
+  return iy;
+}
+function npcAI(u) {
+  let iy = 0;
+  forNear(u.x, u.x + 34, o => { if ((o.solid || o.fx) && o.x > u.x && Math.abs(o.y - u.y) < o.hh + 6) iy = u.y < o.y ? -1 : 1; });
+  if (Math.random() < 0.15) iy = 0;
+  const ry = roadY(u.x);
+  if (Math.abs(u.y - ry) > RH - 4) iy = Math.sign(ry - u.y);
+  return iy;
+}
+function overlapsSolid(u, x, y) {
+  const s = SPEC[u.kind]; let hit = null;
+  forNear(x - s.hw, x + s.hw, o => { if (!hit && o.solid && Math.abs(x - o.x) < s.hw + o.hw && Math.abs(y - o.y) < s.hh + o.hh) hit = o; });
+  return hit;
+}
+function updUnit(u, dt) {
+  const s = SPEC[u.kind]; u.t += dt;
+  if (u.decoy > 0) u.decoy -= dt;
+  const vehicle = u.kind !== 'foot', manned = vehicle && (u.crew > 0);
+  if (vehicle && !manned) {
+    u.vx *= Math.pow(0.55, dt); u.vy *= Math.pow(0.3, dt);
+  } else if (u.tumble > 0) {
+    u.tumble -= dt; u.vx *= Math.pow(0.3, dt); u.vy *= Math.pow(0.15, dt);
+  } else {
+    let ix = 0, iy = 0;
+    if (u === ctl) { ix = input.x; iy = input.y; }
+    else if (u.npc) iy = npcAI(u);
+    else iy = buddyAI(u);
+    let tv = u.npc ? u.cruise : ix > 0 ? s.boost : ix < 0 ? s.brake : s.cruise;
+    if (Math.abs(u.y - roadY(u.x)) > RH + 1) tv *= s.off;
+    if (u.slow > 0) { u.slow -= dt; tv *= 0.55; }
+    u.vx += (tv - u.vx) * Math.min(1, dt * s.ak);
+    if (u.skid > 0) { u.skid -= dt; u.vy += (Math.random() - 0.5) * 500 * dt; }
+    else u.vy += (iy * s.lat - u.vy) * Math.min(1, dt * s.lk);
+  }
+  let nx = u.x + u.vx * dt, ny = u.y + u.vy * dt;
+  if (ny < HUD + 5) { ny = HUD + 5; u.vy = Math.max(0, u.vy); }
+  if (ny > VH - 3) { ny = VH - 3; u.vy = Math.min(0, u.vy); }
+  const hit = overlapsSolid(u, nx, ny);
+  if (hit) {
+    if (vehicle) { u.x = nx; u.y = ny; crash(u); return; }
+    if (!overlapsSolid(u, u.x, ny)) { nx = u.x; u.vx *= 0.3; }
+    else if (!overlapsSolid(u, nx, u.y)) { ny = u.y; }
+    else { nx = u.x; ny = u.y; }
+  }
+  u.x = nx; u.y = ny;
+  // soft hazards
+  let inFx = null;
+  forNear(u.x - s.hw, u.x + s.hw, o => { if (o.fx && Math.abs(u.x - o.x) < s.hw + o.hw && Math.abs(u.y - o.y) < s.hh + o.hh) inFx = o; });
+  if (inFx && inFx !== u.lastFx) {
+    if (inFx.fx === 'puddle') {
+      if (vehicle) { u.skid = u.kind === 'van' ? 0.45 : 0.6; u.vy += (Math.random() < 0.5 ? -1 : 1) * rnd(50, 80); u.vx *= 0.72; }
+      for (let i = 0; i < 12; i++) part(u.x, u.y, { vx: rnd(-50, 30), vy: rnd(-50, 50), vz: rnd(20, 50), life: 0.4, col: i % 2 ? '#9cc6dc' : '#5f8ba6', grav: 140, drag: 1 });
+      if (u === ctl) blip(200, 0.2, 'triangle', 0.06, -120);
+    } else if (inFx.fx === 'trash') {
+      if (vehicle) { u.vx *= 0.8; u.vy += rnd(-35, 35); }
+      for (let i = 0; i < 6; i++) part(u.x, u.y, { vx: rnd(-40, 40), vy: rnd(-30, 30), vz: rnd(20, 50), life: 0.4, col: ['#9aa190', '#6b5640', '#c9c2a4'][i % 3], grav: 140, drag: 1 });
+      if (u === ctl) blip(120, 0.08, 'square', 0.05);
+    }
+  }
+  if (inFx && !vehicle) u.slow = 0.15;
+  u.lastFx = inFx;
+  // riders hitting each other
+  if (vehicle && manned || u.kind === 'foot') {
+    for (const v of units) {
+      if (v === u || !v.alive || (!u.npc && !v.npc)) continue;
+      const a = SPEC[u.kind], b = SPEC[v.kind];
+      if (Math.abs(u.x - v.x) < a.hw + b.hw && Math.abs(u.y - v.y) < a.hh + b.hh) {
+        if (u.kind === 'foot') { kill(u); }
+        else if (v.kind === 'foot') { kill(v); }
+        else { crash(u); crash(v); }
+        return;
+      }
+    }
+  }
+  // dust
+  if (vehicle && Math.abs(u.vx) > 30 && Math.random() < dt * 30) {
+    const off = Math.abs(u.y - roadY(u.x)) > RH + 1;
+    part(u.x - s.hw, u.y + rnd(-s.hh, s.hh), { vx: -rnd(5, 20), vy: rnd(-6, 6), vz: rnd(4, 10), life: rnd(0.3, 0.6), size: Math.random() < 0.3 ? 2 : 1, col: off ? '#e0c46a' : '#a88a62', drag: 2 });
+  }
+  if (!u.npc) u.maxX = Math.max(u.maxX, u.x);
+  // made it
+  if (!u.npc && u.x > M.front + 6 && soldiersIn(u) > 0) {
+    const n = soldiersIn(u); u.alive = false; u.safe = true; W.made += n;
+    say(n > 1 ? n + ' MADE IT!' : 'MADE IT!', '#7ef08a', 1.8);
+    for (let i = 0; i < 20; i++) part(u.x, u.y, { vx: rnd(-40, 40), vy: rnd(-30, 30), vz: rnd(20, 70), life: 0.8, col: ['#7ef08a', '#f3d34a', '#ffffff'][i % 3], grav: 60, drag: 1 });
+    [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => blip(f, 0.14, 'square', 0.06), i * 90));
+  }
+  if (u.npc && (u.x < camX - 80 || u.x > M.front)) u.alive = false;
+}
+
+// ---------------------------------------------------------------- update
+function update(dt) {
+  clock += dt;
+  if (msg && (msg.t -= dt) <= 0) msg = null;
+  shake = Math.max(0, shake - dt * 14);
+  for (const p of parts) {
+    p.life -= dt;
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+    p.vz -= p.grav * dt; if (p.z < 0 && p.grav > 0) { p.z = 0; p.vz = 0; p.vx *= 0.5; p.vy *= 0.5; }
+    const k = Math.pow(0.5, dt * p.drag); p.vx *= k; p.vy *= k;
+    if (p.smoke) p.size += dt * 2;
+  }
+  parts = parts.filter(p => p.life > 0);
+  // burning wrecks keep smoking
+  forNear(camX - 20, camX + VW + 20, o => {
+    if (o.smoke && Math.random() < dt * 7) part(o.x + rnd(-4, 4), o.y - 4, { vx: rnd(4, 12), vz: rnd(8, 16), life: rnd(1.2, 2.2), size: 2, col: Math.random() < 0.5 ? 'rgba(70,66,62,0.8)' : 'rgba(96,92,86,0.7)', drag: 0.4, smoke: true });
+  });
+
+  if (state === 'title') { camX += 45 * dt; if (camX > M.front - 200) camX = -100; return; }
+  if (state === 'card') { cardT -= dt; if (cardT <= 0) startRun(); return; }
+  if (state === 'over') { overT += dt; return; }
+
+  for (const u of units) if (u.alive) updUnit(u, dt);
+  for (const d of drones) updDrone(d, dt);
+  drones = drones.filter(d => !d.dead);
+  units = units.filter(u => u.alive || u === ctl);
+
+  const alive = aliveSoldiers();
+  if ((!ctl || !ctl.alive || (ctl.kind !== 'foot' && ctl.crew <= 0)) && alive.length) {
+    const prev = ctl;
+    ctl = alive.reduce((a, b) => (prev ? Math.hypot(a.x - prev.x, a.y - prev.y) < Math.hypot(b.x - prev.x, b.y - prev.y) : a.x > b.x) ? a : b);
+    if (prev && !prev.safe && msg == null) say('NEXT MAN UP', '#f3d34a', 1);
+  }
+  if (alive.length) {
+    run.time += dt;
+    const lead = Math.max(...alive.map(u => u.x));
+    if (!run.zone && lead > M.gauntEnd) run.zone = true;
+    if (run.zone) {
+      run.dTimer -= dt;
+      const maxC = Math.min(4, 1 + Math.floor(run.droneIdx / 3));
+      if (run.dTimer <= 0 && drones.length < maxC) { spawnDrone(); run.dTimer = Math.max(0.55, 3.0 - run.droneIdx * 0.3 - (M.n - 1) * 0.25); }
+    }
+  } else {
+    run.endT += dt;
+    if (run.endT > 1.9) {
+      W.best = Math.max(W.best, run.time);
+      W.dist += Math.max(0, ...units.filter(u => !u.npc).map(u => u.maxX), ctl ? ctl.maxX : 0);
+      if (W.left > 0) prepCard(); else endWave();
+      return;
+    }
+  }
+  if (ctl) camX += ((ctl.x - 110) - camX) * Math.min(1, dt * 6);
+
+  // audio
+  if (AC) {
+    const t = AC.currentTime;
+    const v = ctl && ctl.alive && ctl.kind !== 'foot' && ctl.crew > 0 ? ctl : null;
+    engGain.gain.setTargetAtTime(v ? 0.05 : 0, t, 0.05);
+    if (v) engOsc.frequency.setTargetAtTime((v.kind === 'van' ? 38 : 55) + Math.abs(v.vx) * (v.kind === 'van' ? 0.35 : 0.5), t, 0.05);
+    let near = 1e9; for (const d of drones) near = Math.min(near, Math.hypot(d.x - camX - 110, d.y - 100));
+    const k = clamp(1 - near / 260, 0, 1);
+    whGain.gain.setTargetAtTime(drones.length ? 0.012 + 0.05 * k * k : 0, t, 0.08);
+    whOsc.frequency.setTargetAtTime(380 + 420 * k + Math.sin(clock * 30) * 20, t, 0.03);
+  }
+}
+function silence() { if (AC) { engGain.gain.setTargetAtTime(0, AC.currentTime, 0.05); whGain.gain.setTargetAtTime(0, AC.currentTime, 0.05); } }
+
+// ---------------------------------------------------------------- render
+function text(s, x, y, col, align = 'left', size = 8) {
+  ctx.font = size + 'px ' + FONT; ctx.textAlign = align; ctx.textBaseline = 'top';
+  ctx.fillStyle = '#0b0c0f'; ctx.fillText(s, x + 1, y + 1);
+  ctx.fillStyle = col; ctx.fillText(s, x, y);
+}
+function disc(x, y, r, col) { ctx.fillStyle = col; for (let dy = -r; dy <= r; dy++) { const w = Math.floor(Math.sqrt(r * r - dy * dy)); ctx.fillRect(x - w, y + dy, w * 2 + 1, 1); } }
+function wire(x0, y0, x1, y1, sag) {
+  const n = Math.max(1, Math.abs(x1 - x0) | 0);
+  for (let i = 0; i <= n; i++) { const t = i / n; ctx.fillRect(Math.round(x0 + (x1 - x0) * t), Math.round(y0 + (y1 - y0) * t + sag * 4 * t * (1 - t)), 1, 1); }
+}
+function drawUnit(u, cx) {
+  const s = SPEC[u.kind], x = Math.round(u.x - cx), y = Math.round(u.y);
+  let img;
+  if (u.kind === 'bike') img = SPR.bike[Math.min(2, u.crew)];
+  else if (u.kind === 'van') img = SPR.van;
+  else img = SPR.foot[((u.t * 10) | 0) % 2];
+  let ang = u.kind === 'foot' && Math.abs(u.vx) < 8 && Math.abs(u.vy) < 8 ? 0 : Math.atan2(u.vy, Math.max(Math.abs(u.vx), 20) * Math.sign(u.vx || 1));
+  if (u.kind !== 'foot' || u.vx >= 0) ang = clamp(ang, -0.6, 0.6);
+  ang = Math.round(ang / 0.13) * 0.13;
+  if (u.tumble > 0) ang = u.t * 18;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  ctx.drawImage(img, -Math.floor(img.width / 2), -Math.floor(img.height / 2));
+  ctx.restore();
+  if (u.kind === 'van' && u.crew > 0) { for (let i = 0; i < u.crew; i++) { ctx.fillStyle = '#0b0c0f'; ctx.fillRect(x - u.crew * 2 + i * 4, y - 14, 3, 3); ctx.fillStyle = '#f3d34a'; ctx.fillRect(x - u.crew * 2 + i * 4, y - 14, 2, 2); } }
+  if (u === ctl && state === 'play' && u.alive) {
+    const by = y - (u.kind === 'van' ? 19 : u.kind === 'bike' ? 11 : 9) - (((clock * 4) | 0) % 2);
+    ctx.fillStyle = '#f3d34a'; ctx.fillRect(x - 2, by, 5, 1); ctx.fillRect(x - 1, by + 1, 3, 1); ctx.fillRect(x, by + 2, 1, 1);
+  }
+}
+function render() {
+  const sx = shake ? Math.round(rnd(-shake, shake)) : 0, sy = shake ? Math.round(rnd(-shake, shake)) : 0;
+  const cx = Math.round(camX) - sx;
+  ctx.setTransform(1, 0, 0, 1, 0, sy);
+  ctx.imageSmoothingEnabled = false;
+  // ground
+  for (let ci = Math.floor(cx / CW); ci <= Math.floor((cx + VW) / CW); ci++) ctx.drawImage(chunk(ci), ci * CW - cx, 0);
+  const vis = []; forNear(cx - 40, cx + VW + 40, o => vis.push(o));
+  for (const o of vis) if (o.flat) ctx.drawImage(o.img, Math.round(o.x - cx - o.ax), Math.round(o.y - o.ay));
+  // shadows
+  ctx.fillStyle = 'rgba(12,16,8,0.3)';
+  for (const o of vis) {
+    if (o.flat || o.deco) continue;
+    if (o.kind === 'pole') { for (let i = 0; i < 13; i++) ctx.fillRect(Math.round(o.x - cx + 1 + i), Math.round(o.y + i * 0.35), 1, 1); continue; }
+    if (o.sh) { const sh = shadow(o.sh[0], o.sh[1]); ctx.drawImage(sh, Math.round(o.x - cx - sh.width / 2 + 2), Math.round(o.y - sh.height / 2 + 2)); }
+  }
+  for (const u of units) if (u.alive) { const s = SPEC[u.kind], sh = shadow(s.hw * 2 + 4, s.hh * 2 + 3); ctx.drawImage(sh, Math.round(u.x - cx - sh.width / 2 + 2), Math.round(u.y - sh.height / 2 + 2)); }
+  for (const d of drones) { const sh = shadow(9, 4); ctx.drawImage(sh, Math.round(d.x - cx - 4), Math.round(d.y - 2)); }
+  // objects and units, back to front
+  const list = vis.filter(o => !o.flat).concat(units.filter(u => u.alive));
+  list.sort((a, b) => a.y - b.y);
+  for (const o of list) {
+    if (o.isUnit) drawUnit(o, cx);
+    else ctx.drawImage(o.img, Math.round(o.x - cx - o.ax), Math.round(o.y - o.ay));
+  }
+  // power lines
+  ctx.fillStyle = '#211d19';
+  for (const row of M.poles) {
+    let i = Math.max(0, lowerBound(row, cx - 80) - 1);
+    for (; i < row.length - 1 && row[i].x < cx + VW + 10; i++) {
+      const a = row[i], b = row[i + 1];
+      if (b.x - a.x > 80) continue;
+      wire(a.x - cx, a.y - 18, b.x - cx, b.y - 18, 3);
+      wire(a.x - cx, a.y - 16, b.x - cx, b.y - 16, 4);
+    }
+  }
+  // drone dive targets
+  for (const d of drones) {
+    if (d.state !== 'dive') continue;
+    const k = d.dt / d.dive, r = Math.round(9 - k * 5), x = Math.round(d.ax - cx), y = Math.round(d.ay);
+    if (((clock * 16) | 0) % 2) continue;
+    ctx.fillStyle = '#ff3b2f';
+    ctx.fillRect(x - r, y - r, 3, 1); ctx.fillRect(x - r, y - r, 1, 3); ctx.fillRect(x + r - 2, y - r, 3, 1); ctx.fillRect(x + r, y - r, 1, 3);
+    ctx.fillRect(x - r, y + r, 3, 1); ctx.fillRect(x - r, y + r - 2, 1, 3); ctx.fillRect(x + r - 2, y + r, 3, 1); ctx.fillRect(x + r, y + r - 2, 1, 3);
+    ctx.fillRect(x, y, 1, 1);
+  }
+  // particles
+  for (const p of parts) {
+    const a = clamp(p.life / p.max, 0, 1);
+    if (p.flash) { disc(Math.round(p.x - cx), Math.round(p.y), Math.round(p.flash * (1.2 - a)), a > 0.5 ? p.col : '#ffd34a'); continue; }
+    ctx.globalAlpha = p.smoke ? a * 0.9 : Math.min(1, a * 2);
+    ctx.fillStyle = p.col;
+    const s = Math.round(p.size);
+    ctx.fillRect(Math.round(p.x - cx - s / 2), Math.round(p.y - p.z - s / 2), s, s);
+  }
+  ctx.globalAlpha = 1;
+  // drones in the air
+  for (const d of drones) {
+    const img = SPR.drone[((clock * 20) | 0) % 2];
+    const x = Math.round(d.x - cx), y = Math.round(d.y - d.z);
+    ctx.drawImage(img, x - 5, y - 5);
+    const blink = d.state === 'dive' ? ((clock * 14) | 0) % 2 : ((clock * 3) | 0) % 2;
+    ctx.fillStyle = blink ? '#ff3b2f' : '#5a1410'; ctx.fillRect(x, y - 1, 1, 1);
+  }
+  // off-screen drone arrows
+  for (const d of drones) {
+    const x = d.x - cx, y = d.y - d.z;
+    if (x >= 0 && x < VW && y >= HUD && y < VH) continue;
+    const ex = clamp(x, 3, VW - 4), ey = clamp(y, HUD + 3, VH - 4);
+    ctx.fillStyle = ((clock * 8) | 0) % 2 ? '#ff3b2f' : '#ffd34a';
+    ctx.fillRect(Math.round(ex) - 1, Math.round(ey) - 1, 3, 3);
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  hud();
+}
+function hud() {
+  if (state === 'title') { titleScreen(); return; }
+  ctx.fillStyle = 'rgba(11,12,15,0.86)'; ctx.fillRect(0, 0, VW, HUD);
+  text('MAP' + M.n, 3, 2, '#f3d34a');
+  // squad: waiting to go, in this run, safe, lost
+  let x = 40;
+  const pip = (col) => { ctx.fillStyle = col; ctx.fillRect(x, 3, 3, 6); x += 4; };
+  const inRun = state === 'play' ? aliveSoldiers().reduce((a, u) => a + soldiersIn(u), 0) : 0;
+  for (let i = 0; i < W.made; i++) pip('#7ef08a');
+  for (let i = 0; i < inRun; i++) pip('#f3d34a');
+  for (let i = 0; i < W.left; i++) pip('#8c9a5a');
+  for (let i = 0; i < W.lost; i++) pip('#7a2a22');
+  // progress to the frontline
+  const bx = 150, bw = 92, lead = ctl ? ctl.x : 0;
+  ctx.fillStyle = '#3a3f2a'; ctx.fillRect(bx, 5, bw, 2);
+  ctx.fillStyle = '#7a2a22'; ctx.fillRect(bx + Math.round(bw * M.gauntEnd / M.front), 4, 1, 4);
+  ctx.fillStyle = '#7ef08a'; ctx.fillRect(bx + bw, 2, 2, 8);
+  if (state === 'play' && ctl) { ctx.fillStyle = '#f3d34a'; ctx.fillRect(bx + Math.round(clamp(lead / M.front, 0, 1) * bw) - 1, 3, 3, 6); }
+  const tm = run && state === 'play' ? run.time : 0;
+  text(tm.toFixed(1), VW - 3, 2, tm > 25 ? '#ff6a4a' : '#eeeadb', 'right');
+  if (state === 'play') {
+    if (msg) {
+      const a = msg.t < 0.35 && ((clock * 10) | 0) % 2;
+      if (!a) text(msg.text, VW / 2, 34, msg.col, 'center');
+    }
+    if (ctl && ctl.alive && ctl.kind !== 'foot' && ctl.crew > 0 && drones.some(d => d.state === 'dive' || Math.hypot(d.x - ctl.x, d.y - ctl.y) < 120)) {
+      if (((clock * 5) | 0) % 2) text('SPACE = BAIL OUT', VW / 2, VH - 14, '#f3d34a', 'center');
+    }
+    if (paused) { ctx.fillStyle = 'rgba(8,9,12,0.6)'; ctx.fillRect(0, HUD, VW, VH - HUD); text('PAUSED', VW / 2, 80, '#ffffff', 'center'); text('P TO RESUME', VW / 2, 96, '#a9aeb4', 'center'); }
+  }
+  if (state === 'card') card();
+  if (state === 'over') overScreen();
+}
+function panel(x, y, w, h) {
+  ctx.fillStyle = 'rgba(11,12,15,0.88)'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = '#5f6d30'; ctx.fillRect(x, y, w, 1); ctx.fillRect(x, y + h - 1, w, 1); ctx.fillRect(x, y, 1, h); ctx.fillRect(x + w - 1, y, 1, h);
+}
+function card() {
+  panel(50, 50, 220, 80);
+  text(M.theme.name, VW / 2, 58, '#f3d34a', 'center');
+  text('SOLDIER ' + Math.min(W.total, W.total - W.left + 1) + ' OF ' + W.total, VW / 2, 72, '#eeeadb', 'center');
+  const s = SPEC[nextUp.kind];
+  text(s.name + (nextUp.crew > 1 ? ' x' + nextUp.crew : ''), VW / 2, 88, '#a9b86a', 'center');
+  const img = nextUp.kind === 'bike' ? SPR.bike[nextUp.crew] : nextUp.kind === 'van' ? SPR.van : SPR.foot[((clock * 8) | 0) % 2];
+  ctx.drawImage(img, Math.round(VW / 2 - img.width / 2), 104);
+}
+function titleScreen() {
+  ctx.fillStyle = 'rgba(11,12,15,0.55)'; ctx.fillRect(0, 0, VW, VH);
+  ctx.drawImage(SPR.coconut, 98, 22);
+  text('COCONUTXTREME', 110, 23, '#d39b62');
+  text('FRONTLINE', VW / 2, 42, '#ff8a2a', 'center', 16);
+  text('RUSH', VW / 2, 62, '#f3d34a', 'center', 16);
+  panel(36, 88, 248, 62);
+  text('WASD / ARROWS  STEER', 46, 96, '#eeeadb');
+  text('RIGHT  FASTER  LEFT  BRAKE', 46, 108, '#a9aeb4');
+  text('SPACE  BAIL OUT OF A RIDE', 46, 120, '#eeeadb');
+  text('REACH THE FRONTLINE', 46, 134, '#7ef08a');
+  if (((clock * 2.5) | 0) % 2) text('PRESS SPACE', VW / 2, 160, '#ffffff', 'center');
+  if (best) text('BEST ' + best, VW - 4, VH - 10, '#8c9a5a', 'right');
+}
+function overScreen() {
+  panel(40, 30, 240, 124);
+  text('WAVE OVER', VW / 2, 38, '#f3d34a', 'center');
+  text(M.theme.name, VW / 2, 52, '#a9b86a', 'center');
+  text('MADE IT', 60, 70, '#eeeadb'); text(W.made + '/' + W.total, 260, 70, '#7ef08a', 'right');
+  text('LOST', 60, 82, '#eeeadb'); text(String(W.lost), 260, 82, '#ff6a4a', 'right');
+  text('BEST RUN', 60, 94, '#eeeadb'); text(W.best.toFixed(1) + 'S', 260, 94, '#eeeadb', 'right');
+  text('SCORE', 60, 110, '#eeeadb'); text(String(W.score), 260, 110, '#f3d34a', 'right');
+  if (W.newBest) text('NEW BEST!', VW / 2, 124, '#7ef08a', 'center');
+  if (overT > 0.8 && ((clock * 2.5) | 0) % 2) text('SPACE  NEXT MAP', VW / 2, 140, '#ffffff', 'center');
+}
+
+// ---------------------------------------------------------------- input
+const keys = new Set();
+const KEYMAP = { ArrowUp: 'u', KeyW: 'u', ArrowDown: 'd', KeyS: 'd', ArrowLeft: 'l', KeyA: 'l', ArrowRight: 'r', KeyD: 'r' };
+function action() {
+  audioInit();
+  if (state === 'title') startWave(1);
+  else if (state === 'card') startRun();
+  else if (state === 'play') { if (!paused) bail(); }
+  else if (state === 'over' && overT > 0.8) startWave(W.n + 1);
+}
+addEventListener('keydown', e => {
+  if (KEYMAP[e.code]) { keys.add(KEYMAP[e.code]); e.preventDefault(); audioInit(); }
+  else if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); if (!e.repeat) action(); }
+  else if (e.code === 'KeyP' || e.code === 'Escape') { if (state === 'play') { paused = !paused; if (paused) silence(); } }
+  else if (e.code === 'KeyM') setMuted(!muted);
+});
+addEventListener('keyup', e => { if (KEYMAP[e.code]) keys.delete(KEYMAP[e.code]); });
+addEventListener('blur', () => { keys.clear(); if (state === 'play') { paused = true; silence(); } });
+// touch: hold above or below your soldier to steer, near the edges to speed up or brake, tap to bail
+let touch = null;
+cvs.addEventListener('pointerdown', e => { cvs.focus(); touch = { id: e.pointerId, t: performance.now(), x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY }; cvs.setPointerCapture(e.pointerId); audioInit(); });
+cvs.addEventListener('pointermove', e => { if (touch && e.pointerId === touch.id) { touch.x = e.clientX; touch.y = e.clientY; touch.moved = touch.moved || Math.hypot(e.clientX - touch.x0, e.clientY - touch.y0) > 10; } });
+const endTouch = e => {
+  if (!touch || e.pointerId !== touch.id) return;
+  if (!touch.moved && performance.now() - touch.t < 230) { if (paused) paused = false; else action(); }
+  touch = null;
+};
+cvs.addEventListener('pointerup', endTouch); cvs.addEventListener('pointercancel', endTouch);
+function readInput() {
+  input.x = (keys.has('r') ? 1 : 0) - (keys.has('l') ? 1 : 0);
+  input.y = (keys.has('d') ? 1 : 0) - (keys.has('u') ? 1 : 0);
+  if (touch && ctl && performance.now() - touch.t > 120) {
+    const r = cvs.getBoundingClientRect();
+    const tx = (touch.x - r.left) / r.width * VW, ty = (touch.y - r.top) / r.height * VH;
+    if (Math.abs(ty - ctl.y) > 4) input.y = Math.sign(ty - ctl.y);
+    if (tx > VW * 0.8) input.x = 1; else if (tx < VW * 0.2) input.x = -1;
+  }
+}
+
+// ---------------------------------------------------------------- loop
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  readInput();
+  if (!paused) update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+newMap(1);
+camX = -100;
+if (document.fonts && document.fonts.load) document.fonts.load('8px "Press Start 2P"').catch(() => { });
+cvs.focus();
+requestAnimationFrame(frame);
+
+// small hook for automated play-testing
+window.__flr = { get state() { return state; }, get W() { return W; }, get run() { return run; }, get units() { return units; }, get drones() { return drones; }, get ctl() { return ctl; }, get M() { return M; }, input, keys, action, roadY: x => roadY(x), forNear: (a, b, f) => forNear(a, b, f), update, setPaused: p => { paused = p; } };
+})();
+</script>
+</body>
+</html>
