@@ -515,7 +515,8 @@ function startRun() {
   const x = -60, u = makeUnit(kind, x, roadY(x), crew);
   units.push(u); ctl = u;
   W.left -= crew; W.runs++;
-  run = { time: 0, droneIdx: 0, zone: false, dTimer: 1.5, endT: 0, lostHere: 0 };
+  // the first drone always shows up 2 to 6 seconds into the run
+  run = { time: 0, droneIdx: 0, zone: false, dTimer: 0, droneAt: rnd(2, 6), endT: 0, lostHere: 0 };
   // other riders on the road: they are in the way, not on your side of the score
   const npcs = 1 + Math.min(3, M.n);
   for (let i = 0; i < npcs; i++) {
@@ -781,8 +782,7 @@ function update(dt) {
   }
   if (alive.length) {
     run.time += dt;
-    const lead = Math.max(...alive.map(u => u.x));
-    if (!run.zone && lead > M.gauntEnd) run.zone = true;
+    if (!run.zone && run.time >= run.droneAt) run.zone = true;
     if (run.zone) {
       run.dTimer -= dt;
       const maxC = Math.min(4, 1 + Math.floor(run.droneIdx / 3));
