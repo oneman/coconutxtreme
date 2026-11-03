@@ -10,12 +10,12 @@
 <style>
   html, body { margin: 0; height: 100%; background: #0d0f12; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; -webkit-user-select: none; }
-  /* the canvas is 480x576: the HUD is drawn at 2x and the world at 5x, then scaled with hard pixel edges */
+  /* the canvas is 960x1152: the HUD is drawn at 4x and the world at 5x, then scaled with hard pixel edges */
   canvas { display: block; outline: none; image-rendering: pixelated; image-rendering: crisp-edges; }
 </style>
 </head>
 <body>
-<canvas id="c" width="480" height="576" tabindex="0" aria-label="CoconutXtreme: Frontline Rush. Drive up the screen with W A S D or the arrow keys, press Space to bail out of a vehicle. Race to the frontline and dodge the drones."></canvas>
+<canvas id="c" width="960" height="1152" tabindex="0" aria-label="CoconutXtreme: Frontline Rush. Drive up the screen with W A S D or the arrow keys, press Space to bail out of a vehicle. Race to the frontline and dodge the drones."></canvas>
 <script>
 (() => {
 'use strict';
@@ -23,9 +23,9 @@
 // ---------------------------------------------------------------- setup
 // World coordinates: x runs forward (toward the frontline), y runs across the road (0..LAT).
 // On screen, forward is up. SW x SH is the HUD's coordinate space (the canvas is RES times that).
-// The world is drawn zoomed in 2.5x on top of it (5 canvas pixels per world pixel), so the view
+// The world is drawn zoomed in 1.25x on top of it (5 canvas pixels per world pixel), so the view
 // shows VW x VH world pixels; the camera follows the player forward (camX) and sideways (camY).
-const SW = 240, SH = 288, RES = 2, ZOOM = 2.5, VW = SW / ZOOM, VH = Math.ceil(SH / ZOOM), LAT = 400, HUD = 12, CW = 128, RH = 104;
+const SW = 240, SH = 288, RES = 4, ZOOM = 1.25, VW = SW / ZOOM, VH = Math.ceil(SH / ZOOM), LAT = 300, HUD = 12, CW = 128, RH = 52;
 const cvs = document.getElementById('c');
 const ctx = cvs.getContext('2d');
 const FONT = '"Press Start 2P", monospace';
@@ -524,7 +524,7 @@ function startRun() {
     const nx = 320 + Math.random() * (M.gauntEnd - 360), b = makeUnit('bike', nx, roadY(nx) + rnd(-RH + 5, RH - 5), 1);
     b.npc = true; b.vx = rnd(38, 54); b.cruise = b.vx; units.push(b);
   }
-  camX = x - 26; camY = clamp(u.y - VW / 2, 0, LAT - VW); state = 'play';
+  camX = x - 50; camY = clamp(u.y - VW / 2, 0, LAT - VW); state = 'play';
   say('GO GO GO!', '#f3d34a', 1.2);
   blip(440, 0.1); setTimeout(() => blip(660, 0.15), 110);
 }
@@ -806,7 +806,7 @@ function update(dt) {
       return;
     }
   }
-  if (ctl) { camX += ((ctl.x - 26) - camX) * Math.min(1, dt * 6); camY += (clamp(ctl.y - VW / 2, 0, LAT - VW) - camY) * Math.min(1, dt * 5); }
+  if (ctl) { camX += ((ctl.x - 50) - camX) * Math.min(1, dt * 6); camY += (clamp(ctl.y - VW / 2, 0, LAT - VW) - camY) * Math.min(1, dt * 5); }
 
   // audio
   if (AC) {
